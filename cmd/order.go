@@ -101,7 +101,7 @@ func GetResult(orders []liquiditytypes.Order, params Params) (r Result) {
 			continue
 		}
 		// skip orders which is not over RemnantThreshold, and over $500 from param
-		if order.OpenAmount.ToDec().Quo(order.Amount.ToDec()).LTE(params.RemnantThreshold) && order.OpenAmount.LT(params.AskQ1) {
+		if order.OpenAmount.ToDec().QuoTruncate(order.Amount.ToDec()).LTE(params.RemnantThreshold) && order.OpenAmount.LT(params.AskQ1) {
 			r.RemCount += 1
 			continue
 		}
@@ -126,21 +126,20 @@ func GetResult(orders []liquiditytypes.Order, params Params) (r Result) {
 		}
 	}
 	// calc mid price, (BidMaxPrice + AskMinPrice)/2
-	// TODO truncate?
-	r.MidPrice = r.BidMaxPrice.Add(r.AskMinPrice).Quo(sdk.NewDec(2))
-	r.Spread = r.AskMinPrice.Sub(r.BidMaxPrice).Quo(r.MidPrice)
-	r.AskWidth = r.AskMaxPrice.Sub(r.AskMinPrice).Quo(r.MidPrice)
-	r.BidWidth = r.BidMaxPrice.Sub(r.BidMinPrice).Quo(r.MidPrice)
+	r.MidPrice = r.BidMaxPrice.Add(r.AskMinPrice).QuoTruncate(sdk.NewDec(2))
+	r.Spread = r.AskMinPrice.Sub(r.BidMaxPrice).QuoTruncate(r.MidPrice)
+	r.AskWidth = r.AskMaxPrice.Sub(r.AskMinPrice).QuoTruncate(r.MidPrice)
+	r.BidWidth = r.BidMaxPrice.Sub(r.BidMinPrice).QuoTruncate(r.MidPrice)
 
 	for _, order := range orders {
 		if order.Direction == liquiditytypes.OrderDirectionSell {
-			askD := order.Price.Sub(r.MidPrice).Quo(r.MidPrice) // TODO: Q, truncate or not (0.004524886877828054 or 0.0045)
+			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
 			fmt.Println(askD)
-			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().Quo(askD.Power(2)))
+			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().QuoTruncate(askD.Power(2)))
 		} else if order.Direction == liquiditytypes.OrderDirectionBuy {
-			bidD := r.MidPrice.Sub(order.Price).Quo(r.MidPrice)
+			bidD := r.MidPrice.Sub(order.Price).QuoTruncate(r.MidPrice)
 			fmt.Println(bidD)
-			r.CBid = r.CBid.Add(order.OpenAmount.ToDec().Quo(bidD.Power(2)))
+			r.CBid = r.CBid.Add(order.OpenAmount.ToDec().QuoTruncate(bidD.Power(2)))
 		}
 	}
 	r.CMin = sdk.MinDec(r.CAsk, r.CBid)

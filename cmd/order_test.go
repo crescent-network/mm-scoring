@@ -275,9 +275,9 @@ func (suite *OrderTestSuite) TestGetResult() {
 				},
 			},
 			MidPrice:           sdk.MustNewDecFromStr("9.945000000000000000"),
-			Spread:             sdk.MustNewDecFromStr("0.003016591251885370"), // TODO: Q, truncated to 0.0030 or actual
-			AskWidth:           sdk.MustNewDecFromStr("0.003016591251885370"),
-			BidWidth:           sdk.MustNewDecFromStr("0.003016591251885370"),
+			Spread:             sdk.MustNewDecFromStr("0.003016591251885369"),
+			AskWidth:           sdk.MustNewDecFromStr("0.003016591251885369"),
+			BidWidth:           sdk.MustNewDecFromStr("0.003016591251885369"),
 			AskQuantity:        sdk.NewInt(200000000),
 			BidQuantity:        sdk.NewInt(160000000),
 			AskMaxPrice:        sdk.MustNewDecFromStr("9.990000000000000000"),
