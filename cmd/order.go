@@ -30,7 +30,6 @@ type Result struct {
 	BidMaxPrice sdk.Dec
 	BidMinPrice sdk.Dec
 
-	// TODO: ref spec
 	CBid sdk.Dec // TODO: To be deleted
 	CAsk sdk.Dec // TODO: To be deleted
 	CMin sdk.Dec // min(CBid, CAsk)
@@ -45,26 +44,8 @@ type Result struct {
 	TotalCount         int
 }
 
-type Params struct {
-	RemnantThreshold sdk.Dec
-	AskQ1            sdk.Int
-}
-
-func (r Result) String() (str string) {
-	s := reflect.ValueOf(&r).Elem()
-	typeOfT := s.Type()
-
-	for i := 0; i < s.NumField(); i++ {
-		f := s.Field(i)
-		lineStr := fmt.Sprintf("%s %s = %v\n",
-			typeOfT.Field(i).Name, f.Type(), f.Interface())
-		str = str + lineStr
-	}
-	return
-}
-
-func GetResult(orders []liquiditytypes.Order, params Params) (r Result) {
-	r = Result{
+func NewResult() (result Result) {
+	return Result{
 		MidPrice:    sdk.ZeroDec(),
 		AskWidth:    sdk.ZeroDec(),
 		BidWidth:    sdk.ZeroDec(),
@@ -86,10 +67,29 @@ func GetResult(orders []liquiditytypes.Order, params Params) (r Result) {
 		RemCount:           0,
 		InvalidStatusCount: 0,
 		TotalCount:         0,
-
-		// TODO: add C
-		// TODO: sorting by price, bid, ask , summation
 	}
+}
+
+type Params struct {
+	MinOpenRatio      sdk.Dec
+	MinOpenDepthRatio sdk.Int
+}
+
+func (r Result) String() (str string) {
+	s := reflect.ValueOf(&r).Elem()
+	typeOfT := s.Type()
+
+	for i := 0; i < s.NumField(); i++ {
+		f := s.Field(i)
+		lineStr := fmt.Sprintf("%s %s = %v\n",
+			typeOfT.Field(i).Name, f.Type(), f.Interface())
+		str = str + lineStr
+	}
+	return
+}
+
+func GetResult(orders []liquiditytypes.Order, pm ParamsMap) (r Result) {
+	r = NewResult()
 	for _, order := range orders {
 		r.TotalCount += 1
 
@@ -100,8 +100,10 @@ func GetResult(orders []liquiditytypes.Order, params Params) (r Result) {
 			r.InvalidStatusCount += 1
 			continue
 		}
-		// skip orders which is not over RemnantThreshold, and over $500 from param
-		if order.OpenAmount.ToDec().QuoTruncate(order.Amount.ToDec()).LTE(params.RemnantThreshold) && order.OpenAmount.LT(params.AskQ1) {
+		// skip orders which is not over MinOpenRatio, and over MinOpenRatio of MinDepth from param
+		if order.OpenAmount.ToDec().QuoTruncate(order.Amount.ToDec()).LTE(pm.Common.MinOpenRatio) && order.OpenAmount.LT(
+			pm.IncentivePairsMap[order.PairId].MinDepth.ToDec().MulTruncate(pm.Common.MinOpenDepthRatio).TruncateInt()) {
+			fmt.Println("rem count", order.Id)
 			r.RemCount += 1
 			continue
 		}

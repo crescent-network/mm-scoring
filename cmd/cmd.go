@@ -22,40 +22,39 @@ import (
 	liquidityparams "github.com/crescent-network/crescent/v3/app/params"
 	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
 	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
 )
 
 type Context struct {
 	StartHeight       int64
 	LastHeight        int64
 	LastScoringHeight int64
-	SyncStatus        bool // TODO: delete?
 
-	LiquidityClient liquiditytypes.QueryClient
-	// TODO: bank, etc
+	LiquidityClient   liquiditytypes.QueryClient
+	MarketMakerClient marketmakertypes.QueryClient
+	//marketmakerparams marketmakertypes.Params
+	ParamsMap ParamsMap
 
 	RpcWebsocketClient *rpchttp.HTTP
 	WebsocketCtx       context.Context
-
-	Enc liquidityparams.EncodingConfig
+	Enc                liquidityparams.EncodingConfig
 
 	AccList  []string
-	PairList []uint64 // if empty, all pairs
+	PairList []uint64
 	Config
 }
 
 type Config struct {
-	StartHeight        int64
-	OrderbookKeepBlock int // zero == keep all?
-	AllOrdersKeepBlock int
-	PairPoolKeepBlock  int
-	BalanceKeepBlock   int
-	GrpcEndpoint       string
-	RpcEndpoint        string
-	//Dir                string
-	// TODO: orderbook argument
+	GrpcEndpoint string
+	RpcEndpoint  string
 }
 
-var config = Config{
+type ParamsMap struct {
+	Common            marketmakertypes.Common
+	IncentivePairsMap map[uint64]marketmakertypes.IncentivePair
+}
+
+var DefaultConfig = Config{
 	GrpcEndpoint: "127.0.0.1:9090",
 	RpcEndpoint:  "tcp://127.0.0.1:26657",
 }
@@ -68,7 +67,7 @@ func NewScoringCmd() *cobra.Command {
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var ctx Context
-			ctx.Config = config
+			ctx.Config = DefaultConfig
 
 			startHeight, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
@@ -90,15 +89,15 @@ func NewScoringCmd() *cobra.Command {
 			return Main(ctx)
 		},
 	}
-	cmd.Flags().String("grpc", "127.0.0.1:9090", "set grpc endpoint")
-	cmd.Flags().String("rpc", "tcp://127.0.0.1:26657", "set rpc endpoint")
+	cmd.Flags().String("grpc", DefaultConfig.GrpcEndpoint, "set grpc endpoint")
+	cmd.Flags().String("rpc", DefaultConfig.RpcEndpoint, "set rpc endpoint")
 	return cmd
 }
 
 func Main(ctx Context) error {
 	ctx.Enc = chain.MakeEncodingConfig()
 
-	// ================================================= Create a connection to the gRPC server.
+	// ===================================== Create a connection to the gRPC server ====================================
 	grpcConn, err := grpc.Dial(
 		ctx.Config.GrpcEndpoint, // your gRPC server address.
 		grpc.WithInsecure(),     // The Cosmos SDK doesn't support any transport security mechanism.
@@ -112,7 +111,8 @@ func Main(ctx Context) error {
 	defer grpcConn.Close()
 
 	ctx.LiquidityClient = liquiditytypes.NewQueryClient(grpcConn)
-	// =========================================================================================
+	ctx.MarketMakerClient = marketmakertypes.NewQueryClient(grpcConn)
+	// =================================================================================================================
 
 	// ===================================== websocket, update ctx.LastHeight ==========================================
 	wc, err := rpchttp.New(ctx.Config.RpcEndpoint, "/websocket")
@@ -131,13 +131,13 @@ func Main(ctx Context) error {
 	ctx.WebsocketCtx = wcCtx
 
 	query := "tm.event = 'NewBlock'"
-	txs, err := ctx.RpcWebsocketClient.Subscribe(ctx.WebsocketCtx, "test-wc", query)
+	res, err := ctx.RpcWebsocketClient.Subscribe(ctx.WebsocketCtx, "test-wc", query)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	go func() {
-		for e := range txs {
+		for e := range res {
 			switch data := e.Data.(type) {
 			case ttypes.EventDataNewBlock:
 				fmt.Printf("Block %s - Height: %d \n", hex.EncodeToString(data.Block.Hash()), data.Block.Height)
@@ -150,7 +150,7 @@ func Main(ctx Context) error {
 		}
 	}()
 
-	// ======================================== websocket end ==========================================================
+	// =================================================================================================================
 
 	fmt.Println("version :", "v0.1.1")
 	fmt.Println("Input Start Height :", ctx.StartHeight)
@@ -193,12 +193,16 @@ func Main(ctx Context) error {
 		}
 
 		// checking pruning height
-		_, err := QueryParamsGRPC(ctx.LiquidityClient, i)
+		marketmakerparams, err := QueryMarketMakerParamsGRPC(ctx.MarketMakerClient, i)
 		if err != nil {
 			fmt.Println("pruning height", i)
-			time.Sleep(100000000)
-			continue
+			panic("not pruning data")
+			//time.Sleep(100000000)
+			//continue
 		}
+
+		ctx.ParamsMap = GetParamsMap(marketmakerparams.Params)
+		fmt.Println(ctx.ParamsMap)
 
 		//block = blockStore.LoadBlock(i)
 		if i%10000 == 0 {
@@ -214,8 +218,6 @@ func Main(ctx Context) error {
 			return err
 		}
 		for _, pair := range pairs {
-			// TODO: check pruning by query params
-
 			orders, err := QueryOrdersGRPC(ctx.LiquidityClient, pair.Id, i)
 			if err != nil {
 				return err
@@ -226,17 +228,6 @@ func Main(ctx Context) error {
 					continue
 				}
 				fmt.Println(pair.Id, order.Id)
-
-				//pools, err := QueryPoolsGRPC(ctx.LiquidityClient, order.PairId, i)
-				//if err != nil {
-				//	return err
-				//}
-				//OrderDataList = append(OrderDataList, OrderData{
-				//	Order:  order,
-				//	Pools:  pools, // TODO: ??
-				//	Height: i,
-				//	//BlockTime: block.Time,
-				//})
 
 				orderCount++
 				orderMap[i][pair.Id] = append(orderMap[i][pair.Id], order)
@@ -272,8 +263,6 @@ func Main(ctx Context) error {
 	}
 	return nil
 }
-
-// TODO: query params for checking pruning
 
 func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.Order, err error) {
 	req := liquiditytypes.QueryOrdersRequest{
@@ -320,9 +309,7 @@ func QueryPoolsGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64)
 	return res.Pools, nil
 }
 
-// TODO: use to check pruning
-
-func QueryParamsGRPC(cli liquiditytypes.QueryClient, height int64) (resParams *liquiditytypes.QueryParamsResponse, err error) {
+func QueryLiquidityParamsGRPC(cli liquiditytypes.QueryClient, height int64) (resParams *liquiditytypes.QueryParamsResponse, err error) {
 	req := liquiditytypes.QueryParamsRequest{}
 
 	var header metadata.MD
@@ -358,4 +345,27 @@ func QueryPairsGRPC(cli liquiditytypes.QueryClient, height int64) (poolsRes []li
 	}
 
 	return pairs.Pairs, nil
+}
+
+func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) (resParams *marketmakertypes.QueryParamsResponse, err error) {
+	req := marketmakertypes.QueryParamsRequest{}
+
+	var header metadata.MD
+
+	res, err := cli.Params(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&req,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return res, nil
+}
+
+func GetParamsMap(params marketmakertypes.Params) (pm ParamsMap) {
+	pm.Common = params.Common
+	pm.IncentivePairsMap = params.IncentivePairsMap()
+	return
 }

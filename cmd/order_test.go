@@ -7,6 +7,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	utils "github.com/crescent-network/crescent/v3/types"
 	"github.com/crescent-network/crescent/v3/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
 	"github.com/stretchr/testify/suite"
 
 	"github.com/crescent-network/mm-scoring/cmd"
@@ -15,7 +16,7 @@ import (
 type OrderTestSuite struct {
 	suite.Suite
 
-	params cmd.Params
+	pm cmd.ParamsMap
 }
 
 func TestOrderTestSuite(t *testing.T) {
@@ -23,10 +24,18 @@ func TestOrderTestSuite(t *testing.T) {
 }
 
 func (suite *OrderTestSuite) SetupTest() {
-	suite.params = cmd.Params{
-		RemnantThreshold: sdk.MustNewDecFromStr("0.5"),
-		AskQ1:            sdk.NewInt(5000000000),
-		// TODO: MaxSpread, MinWidth, MinDepth, etc,
+	suite.pm = cmd.ParamsMap{
+		Common: marketmakertypes.DefaultCommon,
+		IncentivePairsMap: map[uint64]marketmakertypes.IncentivePair{
+			1: {
+				PairId:          1,
+				UpdateTime:      utils.ParseTime("2022-09-01T00:00:00Z"),
+				IncentiveWeight: sdk.MustNewDecFromStr("0.1"),
+				MaxSpread:       sdk.MustNewDecFromStr("0.012"),
+				MinWidth:        sdk.MustNewDecFromStr("0.002"),
+				MinDepth:        sdk.NewInt(50000000000),
+			},
+		},
 	}
 }
 
@@ -292,7 +301,7 @@ func (suite *OrderTestSuite) TestGetResult() {
 		},
 	} {
 		suite.Run(tc.Name, func() {
-			result := cmd.GetResult(tc.Orders, suite.params)
+			result := cmd.GetResult(tc.Orders, suite.pm)
 			suite.Require().EqualValues(result.MidPrice, tc.MidPrice)
 			suite.Require().EqualValues(result.Spread, tc.Spread)
 			suite.Require().EqualValues(result.AskWidth, tc.AskWidth)

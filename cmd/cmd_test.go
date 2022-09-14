@@ -34,7 +34,11 @@ func (suite *CmdTestSuite) TestMain2() {
 		},
 	} {
 		suite.Run(tc.dir, func() {
-			res := cmd.Main(tc.startHeight)
+			ctx := cmd.Context{
+				StartHeight: tc.startHeight,
+				Config:      cmd.DefaultConfig,
+			}
+			res := cmd.Main(ctx)
 			fmt.Println(res)
 		})
 	}
