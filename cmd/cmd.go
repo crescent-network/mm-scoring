@@ -2,7 +2,9 @@ package cmd
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"strconv"
 	"time"
 
@@ -10,10 +12,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
 
+	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
+	ttypes "github.com/tendermint/tendermint/types"
+
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/cosmos/cosmos-sdk/types/query"
-
-	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
 
 	chain "github.com/crescent-network/crescent/v3/app"
 	liquidityparams "github.com/crescent-network/crescent/v3/app/params"
@@ -22,9 +25,10 @@ import (
 )
 
 type Context struct {
-	StartHeight int64
-	LastHeight  int64
-	SyncStatus  bool // TODO: delete?
+	StartHeight       int64
+	LastHeight        int64
+	LastScoringHeight int64
+	SyncStatus        bool // TODO: delete?
 
 	LiquidityClient liquiditytypes.QueryClient
 	// TODO: bank, etc
@@ -46,17 +50,14 @@ type Config struct {
 	PairPoolKeepBlock  int
 	BalanceKeepBlock   int
 	GrpcEndpoint       string
-	//RpcEndpoint        string
+	RpcEndpoint        string
 	//Dir                string
 	// TODO: orderbook argument
 }
 
 var config = Config{
-	StartHeight:  0,
 	GrpcEndpoint: "127.0.0.1:9090",
-	//RpcEndpoint:  "tcp://127.0.0.1:26657",
-	//Dir:          "", // TODO: home
-	// TODO: GRPC, RPC endpoint
+	RpcEndpoint:  "tcp://127.0.0.1:26657",
 }
 
 func NewScoringCmd() *cobra.Command {
@@ -64,22 +65,37 @@ func NewScoringCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		// TODO: grpc endpoint
 		Use:  "mm-scoring [start-height]",
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			var ctx Context
+			ctx.Config = config
+
 			startHeight, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
 				return fmt.Errorf("parse start-Height: %w", err)
 			}
-			return Main(startHeight)
+
+			ctx.StartHeight = startHeight
+
+			grpcEndpoint, _ := cmd.Flags().GetString("grpc")
+			if grpcEndpoint != ctx.Config.GrpcEndpoint {
+				ctx.Config.GrpcEndpoint = grpcEndpoint
+			}
+
+			rpcEndpoint, _ := cmd.Flags().GetString("rpc")
+			if rpcEndpoint != ctx.Config.RpcEndpoint {
+				ctx.Config.RpcEndpoint = rpcEndpoint
+			}
+
+			return Main(ctx)
 		},
 	}
+	cmd.Flags().String("grpc", "127.0.0.1:9090", "set grpc endpoint")
+	cmd.Flags().String("rpc", "tcp://127.0.0.1:26657", "set rpc endpoint")
 	return cmd
 }
 
-func Main(startHeight int64) error {
-
-	var ctx Context
-	ctx.Config = config
+func Main(ctx Context) error {
 	ctx.Enc = chain.MakeEncodingConfig()
 
 	// ================================================= Create a connection to the gRPC server.
@@ -98,53 +114,47 @@ func Main(startHeight int64) error {
 	ctx.LiquidityClient = liquiditytypes.NewQueryClient(grpcConn)
 	// =========================================================================================
 
-	fmt.Println("version :", "v0.1.0")
-	fmt.Println("Input Start Height :", startHeight)
+	// ===================================== websocket, update ctx.LastHeight ==========================================
+	wc, err := rpchttp.New(ctx.Config.RpcEndpoint, "/websocket")
+	if err != nil {
+		log.Fatal(err)
+	}
+	ctx.RpcWebsocketClient = wc
 
-	//// checking start height
-	//block := blockStore.LoadBlock(startHeight)
-	//if block == nil {
-	//	fmt.Println(startHeight, "is not available on this data")
-	//	for i := 0; i < 1000000000000; i++ {
-	//		block := blockStore.LoadBlock(int64(i))
-	//		if block != nil {
-	//			fmt.Println("available starting Height : ", i)
-	//			break
-	//		}
-	//	}
-	//	return nil
-	//}
-	//
-	//// checking end height
-	//if endHeight > blockStore.Height() {
-	//	fmt.Println(endHeight, "is not available, Latest Height : ", blockStore.Height())
-	//	return nil
-	//}
+	err = ctx.RpcWebsocketClient.Start()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ctx.RpcWebsocketClient.Stop()
+	wcCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	ctx.WebsocketCtx = wcCtx
 
-	// Init app
-	//encCfg := app.MakeEncodingConfig()
-	//app := app.NewApp(log.NewNopLogger(), db, nil, false, map[int64]bool{}, "localnet", 0, encCfg, app.EmptyAppOptions{})
-	//// should be load last height from v2 (sdk 0.45.*)
-	//if err := app.LoadHeight(endHeight); err != nil {
-	//	panic(err)
-	//}
+	query := "tm.event = 'NewBlock'"
+	txs, err := ctx.RpcWebsocketClient.Subscribe(ctx.WebsocketCtx, "test-wc", query)
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	//// Set tx index
-	//store, err := tmdb.NewGoLevelDBWithOpts("data/tx_index", dir, &opt.Options{
-	//	ErrorIfMissing: true,
-	//	ReadOnly:       true,
-	//})
-	//if err != nil {
-	//	return fmt.Errorf("open db: %w", err)
-	//}
-	//defer store.Close()
-	// ============================ tx parsing logics ========================
-	//txi := txkv.NewTxIndex(store)
-	//txDecoder := encCfg.TxConfig.TxDecoder()
-	// ============================ tx parsing logics ========================
+	go func() {
+		for e := range txs {
+			switch data := e.Data.(type) {
+			case ttypes.EventDataNewBlock:
+				fmt.Printf("Block %s - Height: %d \n", hex.EncodeToString(data.Block.Hash()), data.Block.Height)
+				ctx.LastHeight = data.Block.Height
+				if err != nil {
+					fmt.Println(err)
+				}
+				break
+			}
+		}
+	}()
 
-	//ctx := app.BaseApp.NewContext(true, tmproto.Header{})
-	//pairs := app.LiquidityKeeper.GetAllPairs(ctx)
+	// ======================================== websocket end ==========================================================
+
+	fmt.Println("version :", "v0.1.1")
+	fmt.Println("Input Start Height :", ctx.StartHeight)
+
 	startTime := time.Now()
 	orderCount := 0
 	orderTxCount := 0
@@ -176,11 +186,17 @@ func Main(startHeight int64) error {
 
 	// iterate from startHeight
 	// TODO: if fail, retry new height with delay or websocket chan
-	for i := startHeight; ; {
+	for i := ctx.StartHeight; ; {
+		if i > ctx.LastHeight {
+			time.Sleep(100000000)
+			continue
+		}
+
+		// checking pruning height
 		_, err := QueryParamsGRPC(ctx.LiquidityClient, i)
-		fmt.Println(i, err)
 		if err != nil {
-			time.Sleep(1000000000)
+			fmt.Println("pruning height", i)
+			time.Sleep(100000000)
 			continue
 		}
 
@@ -247,141 +263,17 @@ func Main(startHeight int64) error {
 			}
 			// TODO: GetResult for ResultMapByHeight, SummationCMap
 		}
+		ctx.LastScoringHeight = i
 		i++
-		// ============================ tx parsing logics ========================
-		//// get block result
-		//block := blockStore.LoadBlock(i)
-		//
-		//// iterate and parse txs of this block, ordered by txResult.Index 0 -> n
-		//for _, tx := range block.Txs {
-		//	txResult, err := txi.Get(tx.Hash())
-		//	if err != nil {
-		//		return fmt.Errorf("get tx index: %w", err)
-		//	}
-		//
-		//	// pass if not succeeded tx
-		//	if txResult.Result.Code != 0 {
-		//		continue
-		//	}
-		//
-		//	sdkTx, err := txDecoder(txResult.Tx)
-		//	if err != nil {
-		//		return fmt.Errorf("decode tx: %w", err)
-		//	}
-		//
-		//	// indexing only targeted msg types
-		//	for _, msg := range sdkTx.GetMsgs() {
-		//		switch msg := msg.(type) {
-		//		// TODO: filter only MM order type MMOrder, MMOrderCancel
-		//		case *liquiditytypes.MsgLimitOrder:
-		//			orderTxCount++
-		//			mmOrderMap[i][msg.PairId] = append(mmOrderMap[i][msg.PairId], *msg)
-		//			//fmt.Println(i, msg.Orderer, msg.Price, txResult.Result.Code, hex.EncodeToString(tx.Hash()))
-		//		}
-		//	}
-		//}
-		// ============================ tx parsing logics ========================
-	}
-	//jsonString, err := json.Marshal(OrderDataList)
-	//fmt.Println(string(jsonString))
-	//fmt.Println("finish", orderCount)
-	//// TODO: analysis logic
 
-	//for _, addrMap := range OrderMapByAddr {
-	//	for _, heightMap := range addrMap {
-	//		for _, orders := range heightMap {
-	//			if len(orders) > 1 {
-	//				fmt.Println("=====================")
-	//				fmt.Printf("%#v\n", orders)
-	//			}
-	//		}
-	//	}
-	//}
+		fmt.Println("StartHeight :", ctx.StartHeight)
+		fmt.Println("LastHeight :", ctx.LastHeight)
+		fmt.Println("LastScoringHeight :", ctx.LastScoringHeight)
+	}
 	return nil
 }
 
 // TODO: query params for checking pruning
-
-//func QueryPairs(app app.App, height int64) (poolsRes []liquiditytypes.Pair, err error) {
-//	pairsReq := liquiditytypes.QueryPairsRequest{
-//		Pagination: &query.PageRequest{
-//			Limit: 100,
-//		},
-//	}
-//
-//	pairsRawData, err := pairsReq.Marshal()
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	pairsRes := app.Query(abci.RequestQuery{
-//		Path:   "/crescent.liquidity.v1beta1.Query/Pairs",
-//		Data:   pairsRawData,
-//		Height: height,
-//		Prove:  false,
-//	})
-//	if pairsRes.Height != height {
-//		fmt.Println(fmt.Errorf("pairs height error %d, %d", pairsRes.Height, height))
-//	}
-//	var pairsLive liquiditytypes.QueryPairsResponse
-//	pairsLive.Unmarshal(pairsRes.Value)
-//	return pairsLive.Pairs, nil
-//}
-//
-//func QueryPools(app app.App, pairId uint64, height int64) (poolsRes []liquiditytypes.PoolResponse, err error) {
-//	// Query Pool
-//	poolsReq := liquiditytypes.QueryPoolsRequest{
-//		PairId:   pairId,
-//		Disabled: "false",
-//		Pagination: &query.PageRequest{
-//			Limit: 50,
-//		},
-//	}
-//	dataPools, err := poolsReq.Marshal()
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	resPool := app.Query(abci.RequestQuery{
-//		Path:   "/crescent.liquidity.v1beta1.Query/Pools",
-//		Data:   dataPools,
-//		Height: height,
-//		Prove:  false,
-//	})
-//	if resPool.Height != height {
-//		fmt.Println(fmt.Errorf("pools height error %d, %d", resPool.Height, height))
-//	}
-//	var pools liquiditytypes.QueryPoolsResponse
-//	pools.Unmarshal(resPool.Value)
-//	return pools.Pools, nil
-//}
-//
-//func QueryOrders(app app.App, pairId uint64, height int64) (poolsRes []liquiditytypes.Order, err error) {
-//	a := liquiditytypes.QueryOrdersRequest{
-//		PairId: pairId,
-//		Pagination: &query.PageRequest{
-//			Limit: 1000000,
-//		},
-//	}
-//	data, err := a.Marshal()
-//	if err != nil {
-//		return nil, err
-//	}
-//
-//	// Query Orders
-//	res := app.Query(abci.RequestQuery{
-//		Path:   "/crescent.liquidity.v1beta1.Query/Orders",
-//		Data:   data,
-//		Height: height,
-//		Prove:  false,
-//	})
-//	if res.Height != height {
-//		fmt.Println(fmt.Errorf("orders height error %d, %d", res.Height, height))
-//	}
-//	var orders liquiditytypes.QueryOrdersResponse
-//	orders.Unmarshal(res.Value)
-//	return orders.Orders, nil
-//}
 
 func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.Order, err error) {
 	req := liquiditytypes.QueryOrdersRequest{
@@ -429,6 +321,7 @@ func QueryPoolsGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64)
 }
 
 // TODO: use to check pruning
+
 func QueryParamsGRPC(cli liquiditytypes.QueryClient, height int64) (resParams *liquiditytypes.QueryParamsResponse, err error) {
 	req := liquiditytypes.QueryParamsRequest{}
 
