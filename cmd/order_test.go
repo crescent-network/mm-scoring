@@ -301,7 +301,9 @@ func (suite *OrderTestSuite) TestGetResult() {
 		},
 	} {
 		suite.Run(tc.Name, func() {
-			result := cmd.GetResult(tc.Orders, suite.pm)
+			result := cmd.NewResult()
+			result.Orders = tc.Orders
+			result = cmd.SetResult(result, suite.pm)
 			suite.Require().EqualValues(result.MidPrice, tc.MidPrice)
 			suite.Require().EqualValues(result.Spread, tc.Spread)
 			suite.Require().EqualValues(result.AskWidth, tc.AskWidth)

@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"reflect"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -17,6 +19,8 @@ import (
 // SET params as json file
 
 type Result struct {
+	Orders []liquiditytypes.Order
+
 	MidPrice sdk.Dec
 	Spread   sdk.Dec
 
@@ -44,8 +48,10 @@ type Result struct {
 	TotalCount         int
 }
 
-func NewResult() (result Result) {
-	return Result{
+func NewResult() (result *Result) {
+	return &Result{
+		Orders: []liquiditytypes.Order{},
+
 		MidPrice:    sdk.ZeroDec(),
 		AskWidth:    sdk.ZeroDec(),
 		BidWidth:    sdk.ZeroDec(),
@@ -70,11 +76,6 @@ func NewResult() (result Result) {
 	}
 }
 
-type Params struct {
-	MinOpenRatio      sdk.Dec
-	MinOpenDepthRatio sdk.Int
-}
-
 func (r Result) String() (str string) {
 	s := reflect.ValueOf(&r).Elem()
 	typeOfT := s.Type()
@@ -88,9 +89,8 @@ func (r Result) String() (str string) {
 	return
 }
 
-func GetResult(orders []liquiditytypes.Order, pm ParamsMap) (r Result) {
-	r = NewResult()
-	for _, order := range orders {
+func SetResult(r *Result, pm ParamsMap) *Result {
+	for _, order := range r.Orders {
 		r.TotalCount += 1
 
 		// skip orders which has not available status
@@ -122,7 +122,7 @@ func GetResult(orders []liquiditytypes.Order, pm ParamsMap) (r Result) {
 			if order.Price.GTE(r.AskMaxPrice) {
 				r.AskMaxPrice = order.Price
 			}
-			if r.BidMinPrice.IsZero() || order.Price.LTE(r.AskMinPrice) {
+			if r.AskMinPrice.IsZero() || order.Price.LTE(r.AskMinPrice) {
 				r.AskMinPrice = order.Price
 			}
 		}
@@ -133,7 +133,7 @@ func GetResult(orders []liquiditytypes.Order, pm ParamsMap) (r Result) {
 	r.AskWidth = r.AskMaxPrice.Sub(r.AskMinPrice).QuoTruncate(r.MidPrice)
 	r.BidWidth = r.BidMaxPrice.Sub(r.BidMinPrice).QuoTruncate(r.MidPrice)
 
-	for _, order := range orders {
+	for _, order := range r.Orders {
 		if order.Direction == liquiditytypes.OrderDirectionSell {
 			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
 			fmt.Println(askD)
@@ -146,8 +146,20 @@ func GetResult(orders []liquiditytypes.Order, pm ParamsMap) (r Result) {
 	}
 	r.CMin = sdk.MinDec(r.CAsk, r.CBid)
 
-	return
+	return r
 	// TODO: checking order tick cap validity
 }
 
 // TODO: live calculation from map OrderMapByHeight
+
+func output(data interface{}, filename string) {
+	var p []byte
+	p, err := json.MarshalIndent(data, "", "\t")
+	if err != nil {
+		fmt.Println(err)
+	}
+	err = ioutil.WriteFile(filename, p, 0644)
+	if err != nil {
+		fmt.Println(err)
+	}
+}

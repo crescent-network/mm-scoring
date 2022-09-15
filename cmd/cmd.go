@@ -163,10 +163,13 @@ func Main(ctx Context) error {
 	orderMap := map[int64]map[uint64][]liquiditytypes.Order{}
 	// pair => Address => height => orders
 	// TODO: // pair => height => Address => orders, delete this
-	OrderMapByAddr := map[uint64]map[string]map[int64][]liquiditytypes.Order{}
+	//OrderMapByAddr := map[uint64]map[string]map[int64][]liquiditytypes.Order{}
 	// TODO: add result(C) for each mm on each height
 	// pair => height => Address => []order, TODO: add result(c)
-	OrderMapByHeight := map[uint64]map[int64]map[string][]liquiditytypes.Order{}
+	OrderMapByHeight := map[uint64]map[int64]map[string]*Result{}
+	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
+	//OrderMapByHeight := map[uint64]map[int64]map[string][]liquiditytypes.Order{}
+	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
 
 	// pair => height
 	//SummationCMap := map[uint64]map[int64]sdk.Dec{}
@@ -232,27 +235,34 @@ func Main(ctx Context) error {
 				orderCount++
 				orderMap[i][pair.Id] = append(orderMap[i][pair.Id], order)
 
-				// indexing order.PairId, address
-				// TODO: filtering only mm address, mm order
-				if _, ok := OrderMapByAddr[pair.Id]; !ok {
-					OrderMapByAddr[pair.Id] = map[string]map[int64][]liquiditytypes.Order{}
-				}
-				if _, ok := OrderMapByAddr[pair.Id][order.Orderer]; !ok {
-					OrderMapByAddr[pair.Id][order.Orderer] = map[int64][]liquiditytypes.Order{}
-				}
-				OrderMapByAddr[pair.Id][order.Orderer][i] = append(OrderMapByAddr[pair.Id][order.Orderer][i], order)
+				//// indexing order.PairId, address
+				//// TODO: filtering only mm address, mm order
+				//if _, ok := OrderMapByAddr[pair.Id]; !ok {
+				//	OrderMapByAddr[pair.Id] = map[string]map[int64][]liquiditytypes.Order{}
+				//}
+				//if _, ok := OrderMapByAddr[pair.Id][order.Orderer]; !ok {
+				//	OrderMapByAddr[pair.Id][order.Orderer] = map[int64][]liquiditytypes.Order{}
+				//}
+				//OrderMapByAddr[pair.Id][order.Orderer][i] = append(OrderMapByAddr[pair.Id][order.Orderer][i], order)
 
 				// TODO: WIP OrderMapByHeight
 				if _, ok := OrderMapByHeight[pair.Id]; !ok {
-					OrderMapByHeight[pair.Id] = map[int64]map[string][]liquiditytypes.Order{}
+					OrderMapByHeight[pair.Id] = map[int64]map[string]*Result{}
 				}
 				if _, ok := OrderMapByHeight[pair.Id][i]; !ok {
-					OrderMapByHeight[pair.Id][i] = map[string][]liquiditytypes.Order{}
+					OrderMapByHeight[pair.Id][i] = map[string]*Result{}
 				}
 				// TODO: sorting order by price, buy, sell
-				OrderMapByHeight[pair.Id][i][order.Orderer] = append(OrderMapByHeight[pair.Id][i][order.Orderer], order)
+				if OrderMapByHeight[pair.Id][i][order.Orderer] == nil {
+					OrderMapByHeight[pair.Id][i][order.Orderer] = NewResult()
+
+				}
+				OrderMapByHeight[pair.Id][i][order.Orderer].Orders = append(OrderMapByHeight[pair.Id][i][order.Orderer].Orders, order)
 			}
-			// TODO: GetResult for ResultMapByHeight, SummationCMap
+			for k, v := range OrderMapByHeight[pair.Id][i] {
+				OrderMapByHeight[pair.Id][i][k] = SetResult(v, ctx.ParamsMap)
+			}
+			// TODO: SetResult for ResultMapByHeight, SummationCMap
 		}
 		ctx.LastScoringHeight = i
 		i++
@@ -260,6 +270,7 @@ func Main(ctx Context) error {
 		fmt.Println("StartHeight :", ctx.StartHeight)
 		fmt.Println("LastHeight :", ctx.LastHeight)
 		fmt.Println("LastScoringHeight :", ctx.LastScoringHeight)
+		output(OrderMapByHeight, "output.json")
 	}
 	return nil
 }
