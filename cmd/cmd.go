@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -23,6 +24,7 @@ import (
 	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
 	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
 	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
+	minttypes "github.com/crescent-network/crescent/v3/x/mint/types"
 )
 
 type Context struct {
@@ -32,15 +34,16 @@ type Context struct {
 
 	LiquidityClient   liquiditytypes.QueryClient
 	MarketMakerClient marketmakertypes.QueryClient
-	//marketmakerparams marketmakertypes.Params
+	MintClient        minttypes.QueryClient
+
 	ParamsMap ParamsMap
 
 	RpcWebsocketClient *rpchttp.HTTP
 	WebsocketCtx       context.Context
 	Enc                liquidityparams.EncodingConfig
 
-	AccList  []string
-	PairList []uint64
+	mmMap map[uint64]map[string]struct{}
+
 	Config
 }
 
@@ -68,6 +71,7 @@ func NewScoringCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var ctx Context
 			ctx.Config = DefaultConfig
+			ctx.mmMap = map[uint64]map[string]struct{}{}
 
 			startHeight, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
@@ -112,6 +116,7 @@ func Main(ctx Context) error {
 
 	ctx.LiquidityClient = liquiditytypes.NewQueryClient(grpcConn)
 	ctx.MarketMakerClient = marketmakertypes.NewQueryClient(grpcConn)
+	ctx.MintClient = minttypes.NewQueryClient(grpcConn)
 	// =================================================================================================================
 
 	// ===================================== websocket, update ctx.LastHeight ==========================================
@@ -156,17 +161,13 @@ func Main(ctx Context) error {
 	fmt.Println("Input Start Height :", ctx.StartHeight)
 
 	startTime := time.Now()
-	orderCount := 0
-	orderTxCount := 0
 
-	// Height => PairId => Order
-	orderMap := map[int64]map[uint64][]liquiditytypes.Order{}
-	// pair => Address => height => orders
-	// TODO: // pair => height => Address => orders, delete this
-	//OrderMapByAddr := map[uint64]map[string]map[int64][]liquiditytypes.Order{}
 	// TODO: add result(C) for each mm on each height
 	// pair => height => Address => []order, TODO: add result(c)
 	OrderMapByHeight := map[uint64]map[int64]map[string]*Result{}
+	// pair => height => Summation C
+	SumCMapByHeight := map[uint64]map[int64]sdk.Dec{}
+
 	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
 	//OrderMapByHeight := map[uint64]map[int64]map[string][]liquiditytypes.Order{}
 	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
@@ -177,19 +178,19 @@ func Main(ctx Context) error {
 	// pair => height => address => result
 	//ResultMapByHeight := map[uint64]map[int64]map[string]Result{}
 
-	// TODO: convert to mmOrder and indexing by mm address
-	mmOrderMap := map[int64]map[uint64][]liquiditytypes.MsgLimitOrder{}
-	//mmOrderCancelMap := map[int64]map[uint64]liquiditytypes.MsgLimitOrder{}
-
-	// TODO: OrderData list
-	//OrderDataList := []OrderData{}
-
 	// TODO: GET params, considering update height
 	//app.MarketMakerKeeper.GetParams(ctx)
 
 	// iterate from startHeight
 	// TODO: if fail, retry new height with delay or websocket chan
 	for i := ctx.StartHeight; ; {
+		// TODO: get height blocktime
+		blockTime, err := QueryLastBlockTimeGRPC(ctx.MintClient, i)
+		if err != nil {
+			fmt.Println("last block time error")
+		}
+		fmt.Println(i, blockTime.String())
+
 		if i > ctx.LastHeight {
 			time.Sleep(100000000)
 			continue
@@ -200,28 +201,18 @@ func Main(ctx Context) error {
 		if err != nil {
 			fmt.Println("pruning height", i)
 			panic("not pruning data")
-			//time.Sleep(100000000)
-			//continue
 		}
 
 		ctx.ParamsMap = GetParamsMap(marketmakerparams.Params)
-		fmt.Println(ctx.ParamsMap)
+		
+		for _, pair := range marketmakerparams.Params.IncentivePairs {
+			// TODO: continue or use last state when updateTime is future
 
-		//block = blockStore.LoadBlock(i)
-		if i%10000 == 0 {
-			fmt.Println(i, time.Now().Sub(startTime), orderCount, orderTxCount)
-		}
-		orderMap[i] = map[uint64][]liquiditytypes.Order{}
-		mmOrderMap[i] = map[uint64][]liquiditytypes.MsgLimitOrder{}
-		// Address -> pair -> height -> orders
+			if _, ok := ctx.mmMap[pair.PairId]; !ok {
+				ctx.mmMap[pair.PairId] = map[string]struct{}{}
+			}
 
-		// Query paris
-		pairs, err := QueryPairsGRPC(ctx.LiquidityClient, i)
-		if err != nil {
-			return err
-		}
-		for _, pair := range pairs {
-			orders, err := QueryOrdersGRPC(ctx.LiquidityClient, pair.Id, i)
+			orders, err := QueryOrdersGRPC(ctx.LiquidityClient, pair.PairId, i)
 			if err != nil {
 				return err
 			}
@@ -230,39 +221,35 @@ func Main(ctx Context) error {
 				if order.Type != liquiditytypes.OrderTypeMM {
 					continue
 				}
-				fmt.Println(pair.Id, order.Id)
 
-				orderCount++
-				orderMap[i][pair.Id] = append(orderMap[i][pair.Id], order)
-
-				//// indexing order.PairId, address
-				//// TODO: filtering only mm address, mm order
-				//if _, ok := OrderMapByAddr[pair.Id]; !ok {
-				//	OrderMapByAddr[pair.Id] = map[string]map[int64][]liquiditytypes.Order{}
-				//}
-				//if _, ok := OrderMapByAddr[pair.Id][order.Orderer]; !ok {
-				//	OrderMapByAddr[pair.Id][order.Orderer] = map[int64][]liquiditytypes.Order{}
-				//}
-				//OrderMapByAddr[pair.Id][order.Orderer][i] = append(OrderMapByAddr[pair.Id][order.Orderer][i], order)
-
-				// TODO: WIP OrderMapByHeight
-				if _, ok := OrderMapByHeight[pair.Id]; !ok {
-					OrderMapByHeight[pair.Id] = map[int64]map[string]*Result{}
+				if _, ok := ctx.mmMap[pair.PairId][order.Orderer]; !ok {
+					ctx.mmMap[pair.PairId][order.Orderer] = struct{}{}
 				}
-				if _, ok := OrderMapByHeight[pair.Id][i]; !ok {
-					OrderMapByHeight[pair.Id][i] = map[string]*Result{}
-				}
-				// TODO: sorting order by price, buy, sell
-				if OrderMapByHeight[pair.Id][i][order.Orderer] == nil {
-					OrderMapByHeight[pair.Id][i][order.Orderer] = NewResult()
 
+				if _, ok := OrderMapByHeight[pair.PairId]; !ok {
+					OrderMapByHeight[pair.PairId] = map[int64]map[string]*Result{}
 				}
-				OrderMapByHeight[pair.Id][i][order.Orderer].Orders = append(OrderMapByHeight[pair.Id][i][order.Orderer].Orders, order)
+				if _, ok := OrderMapByHeight[pair.PairId][i]; !ok {
+					OrderMapByHeight[pair.PairId][i] = map[string]*Result{}
+				}
+
+				if OrderMapByHeight[pair.PairId][i][order.Orderer] == nil {
+					OrderMapByHeight[pair.PairId][i][order.Orderer] = NewResult()
+				}
+				OrderMapByHeight[pair.PairId][i][order.Orderer].Orders = append(OrderMapByHeight[pair.PairId][i][order.Orderer].Orders, order)
 			}
-			for k, v := range OrderMapByHeight[pair.Id][i] {
-				OrderMapByHeight[pair.Id][i][k] = SetResult(v, ctx.ParamsMap)
+			// init SumCMapByHeight for each pair, height
+			if _, ok := SumCMapByHeight[pair.PairId]; !ok {
+				SumCMapByHeight[pair.PairId] = map[int64]sdk.Dec{}
 			}
-			// TODO: SetResult for ResultMapByHeight, SummationCMap
+			if _, ok := SumCMapByHeight[pair.PairId][i]; !ok {
+				SumCMapByHeight[pair.PairId][i] = sdk.ZeroDec()
+			}
+			// calc C and summation min C per each addresses
+			for k, v := range OrderMapByHeight[pair.PairId][i] {
+				OrderMapByHeight[pair.PairId][i][k] = SetResult(v, ctx.ParamsMap)
+				SumCMapByHeight[pair.PairId][i] = SumCMapByHeight[pair.PairId][i].Add(OrderMapByHeight[pair.PairId][i][k].CMin)
+			}
 		}
 		ctx.LastScoringHeight = i
 		i++
@@ -271,6 +258,34 @@ func Main(ctx Context) error {
 		fmt.Println("LastHeight :", ctx.LastHeight)
 		fmt.Println("LastScoringHeight :", ctx.LastScoringHeight)
 		output(OrderMapByHeight, "output.json")
+		output(SumCMapByHeight, "output-sum.json")
+		output(ctx.mmMap, "output-mmMap.json")
+
+		//block = blockStore.LoadBlock(i)
+		if i%100 == 0 {
+			fmt.Println(i, time.Now().Sub(startTime))
+			// TODO: calc tmp score with summation and uptime calc
+			for pair, mms := range ctx.mmMap {
+				for mm, _ := range mms {
+					sumCQuoSumC := sdk.ZeroDec()
+					for height, v := range OrderMapByHeight[pair] {
+						// summation CQuoSumC
+						sumCQuoSumC = sumCQuoSumC.Add(v[mm].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
+					}
+					// TODO: make map, uptime^3
+					fmt.Println(i, pair, mm, sumCQuoSumC)
+				}
+			}
+		}
+
+		// TODO: 20 serial block Obligation
+		// TODO: 100 total block Obligation
+		// TODO: Hour Obligation
+		// TODO: Daily Obligation
+		// TODO: Monthly Obligation
+
+		// TODO: reset when next month
+
 	}
 	return nil
 }
@@ -373,6 +388,23 @@ func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) 
 	}
 
 	return res, nil
+}
+
+func QueryLastBlockTimeGRPC(cli minttypes.QueryClient, height int64) (blockTime *time.Time, err error) {
+	req := minttypes.QueryLastBlockTimeRequest{}
+
+	var header metadata.MD
+
+	res, err := cli.LastBlockTime(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&req,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.LastBlockTime, nil
 }
 
 func GetParamsMap(params marketmakertypes.Params) (pm ParamsMap) {

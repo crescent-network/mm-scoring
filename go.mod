@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/cosmos/cosmos-sdk v0.45.3
-	github.com/crescent-network/crescent/v3 v3.0.0-rc1
+	github.com/crescent-network/crescent/v3 v3.0.0-rc1.0.20220917143135-d76fe33aa1fd
 	github.com/spf13/cobra v1.4.0
 	github.com/stretchr/testify v1.7.1
 	github.com/tendermint/tendermint v0.34.19

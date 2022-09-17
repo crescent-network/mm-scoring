@@ -103,7 +103,6 @@ func SetResult(r *Result, pm ParamsMap) *Result {
 		// skip orders which is not over MinOpenRatio, and over MinOpenRatio of MinDepth from param
 		if order.OpenAmount.ToDec().QuoTruncate(order.Amount.ToDec()).LTE(pm.Common.MinOpenRatio) && order.OpenAmount.LT(
 			pm.IncentivePairsMap[order.PairId].MinDepth.ToDec().MulTruncate(pm.Common.MinOpenDepthRatio).TruncateInt()) {
-			fmt.Println("rem count", order.Id)
 			r.RemCount += 1
 			continue
 		}
@@ -136,11 +135,9 @@ func SetResult(r *Result, pm ParamsMap) *Result {
 	for _, order := range r.Orders {
 		if order.Direction == liquiditytypes.OrderDirectionSell {
 			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
-			fmt.Println(askD)
 			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().QuoTruncate(askD.Power(2)))
 		} else if order.Direction == liquiditytypes.OrderDirectionBuy {
 			bidD := r.MidPrice.Sub(order.Price).QuoTruncate(r.MidPrice)
-			fmt.Println(bidD)
 			r.CBid = r.CBid.Add(order.OpenAmount.ToDec().QuoTruncate(bidD.Power(2)))
 		}
 	}
