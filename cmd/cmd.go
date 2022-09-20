@@ -2,13 +2,16 @@ package cmd
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"log"
+	"math/rand"
 	"strconv"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
+	utils "github.com/crescent-network/crescent/v3/types"
+	"github.com/crescent-network/crescent/v3/x/liquidity/amm"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -20,7 +23,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/types/query"
 
 	chain "github.com/crescent-network/crescent/v3/app"
-	liquidityparams "github.com/crescent-network/crescent/v3/app/params"
+	appparams "github.com/crescent-network/crescent/v3/app/params"
 	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
 	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
 	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
@@ -40,9 +43,11 @@ type Context struct {
 
 	RpcWebsocketClient *rpchttp.HTTP
 	WebsocketCtx       context.Context
-	Enc                liquidityparams.EncodingConfig
+	Enc                appparams.EncodingConfig
 
-	mmMap map[uint64]map[string]struct{}
+	// TODO: eligible, apply mm map
+	mmMap         map[uint64]map[string]struct{}
+	mmMapEligible map[uint64]map[string]struct{}
 
 	Config
 }
@@ -50,6 +55,9 @@ type Context struct {
 type Config struct {
 	GrpcEndpoint string
 	RpcEndpoint  string
+
+	// when if true, generate mock orders
+	SimulationMode bool
 }
 
 type ParamsMap struct {
@@ -58,14 +66,15 @@ type ParamsMap struct {
 }
 
 var DefaultConfig = Config{
-	GrpcEndpoint: "127.0.0.1:9090",
-	RpcEndpoint:  "tcp://127.0.0.1:26657",
+	GrpcEndpoint:   "127.0.0.1:9090",
+	RpcEndpoint:    "tcp://127.0.0.1:26657",
+	SimulationMode: false,
 }
 
 func NewScoringCmd() *cobra.Command {
+	// set prefix to cre from cosmos
 	crecmd.GetConfig()
 	cmd := &cobra.Command{
-		// TODO: grpc endpoint
 		Use:  "mm-scoring [start-height]",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -90,11 +99,21 @@ func NewScoringCmd() *cobra.Command {
 				ctx.Config.RpcEndpoint = rpcEndpoint
 			}
 
+			simStr, _ := cmd.Flags().GetString("sim")
+			if simStr != "" {
+				sim, err := strconv.ParseBool(simStr)
+				if err != nil {
+					return fmt.Errorf("parse disabled flag: %w", err)
+				}
+				ctx.Config.SimulationMode = sim
+			}
+
 			return Main(ctx)
 		},
 	}
 	cmd.Flags().String("grpc", DefaultConfig.GrpcEndpoint, "set grpc endpoint")
 	cmd.Flags().String("rpc", DefaultConfig.RpcEndpoint, "set rpc endpoint")
+	cmd.Flags().String("sim", "false", "set rpc endpoint")
 	return cmd
 }
 
@@ -145,7 +164,7 @@ func Main(ctx Context) error {
 		for e := range res {
 			switch data := e.Data.(type) {
 			case ttypes.EventDataNewBlock:
-				fmt.Printf("Block %s - Height: %d \n", hex.EncodeToString(data.Block.Hash()), data.Block.Height)
+				fmt.Printf("New Block: %d \n", data.Block.Height)
 				ctx.LastHeight = data.Block.Height
 				if err != nil {
 					fmt.Println(err)
@@ -159,6 +178,7 @@ func Main(ctx Context) error {
 
 	fmt.Println("version :", "v0.1.1")
 	fmt.Println("Input Start Height :", ctx.StartHeight)
+	fmt.Println("Simulation mode :", ctx.Config.SimulationMode)
 
 	startTime := time.Now()
 
@@ -181,20 +201,23 @@ func Main(ctx Context) error {
 	// TODO: GET params, considering update height
 	//app.MarketMakerKeeper.GetParams(ctx)
 
+	time.Sleep(1000000000)
+
 	// iterate from startHeight
 	// TODO: if fail, retry new height with delay or websocket chan
 	for i := ctx.StartHeight; ; {
-		// TODO: get height blocktime
 		blockTime, err := QueryLastBlockTimeGRPC(ctx.MintClient, i)
-		if err != nil {
-			fmt.Println("last block time error")
-		}
-		fmt.Println(i, blockTime.String())
 
-		if i > ctx.LastHeight {
-			time.Sleep(100000000)
+		if err != nil || blockTime == nil || i > ctx.LastHeight {
+			fmt.Println("waiting for the next block...")
+			time.Sleep(1000000000)
 			continue
 		}
+
+		fmt.Println("----------")
+		fmt.Println(i, blockTime.String())
+		// TODO: uptime map
+		TimeToHour(blockTime)
 
 		// checking pruning height
 		marketmakerparams, err := QueryMarketMakerParamsGRPC(ctx.MarketMakerClient, i)
@@ -203,18 +226,39 @@ func Main(ctx Context) error {
 			panic("not pruning data")
 		}
 
-		ctx.ParamsMap = GetParamsMap(marketmakerparams.Params)
-		
-		for _, pair := range marketmakerparams.Params.IncentivePairs {
+		// need when only using generator
+		liquidityparams, err := QueryLiquidityParamsGRPC(ctx.LiquidityClient, i)
+		if err != nil {
+			panic(err)
+		}
+
+		ctx.ParamsMap = GetParamsMap(marketmakerparams.Params, blockTime)
+
+		pairs, err := QueryPairsGRPC(ctx.LiquidityClient, i)
+		if err != nil {
+			panic(err)
+		}
+		pairsMap := GetPairsMap(pairs)
+
+		for _, pair := range ctx.ParamsMap.IncentivePairsMap {
 			// TODO: continue or use last state when updateTime is future
 
 			if _, ok := ctx.mmMap[pair.PairId]; !ok {
 				ctx.mmMap[pair.PairId] = map[string]struct{}{}
 			}
 
-			orders, err := QueryOrdersGRPC(ctx.LiquidityClient, pair.PairId, i)
-			if err != nil {
-				return err
+			// TODO: replacing generator
+			var orders []liquiditytypes.Order
+			if ctx.Config.SimulationMode {
+				orders, err = GenerateMockOrders(pairsMap[pair.PairId], ctx.ParamsMap.IncentivePairsMap[pair.PairId], i, blockTime, liquidityparams, ctx.mmMap[pair.PairId])
+				if err != nil {
+					return err
+				}
+			} else {
+				orders, err = QueryOrdersGRPC(ctx.LiquidityClient, pair.PairId, i)
+				if err != nil {
+					return err
+				}
 			}
 			for _, order := range orders {
 				// scoring only mm order type
@@ -247,7 +291,12 @@ func Main(ctx Context) error {
 			}
 			// calc C and summation min C per each addresses
 			for k, v := range OrderMapByHeight[pair.PairId][i] {
-				OrderMapByHeight[pair.PairId][i][k] = SetResult(v, ctx.ParamsMap)
+				result := SetResult(v, ctx.ParamsMap, pair.PairId)
+				if result == nil {
+					continue
+				}
+				// TODO: summation only eligible mm
+				OrderMapByHeight[pair.PairId][i][k] = result
 				SumCMapByHeight[pair.PairId][i] = SumCMapByHeight[pair.PairId][i].Add(OrderMapByHeight[pair.PairId][i][k].CMin)
 			}
 		}
@@ -269,11 +318,14 @@ func Main(ctx Context) error {
 				for mm, _ := range mms {
 					sumCQuoSumC := sdk.ZeroDec()
 					for height, v := range OrderMapByHeight[pair] {
+						// TODO: fix div by zero
 						// summation CQuoSumC
-						sumCQuoSumC = sumCQuoSumC.Add(v[mm].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
+						if !SumCMapByHeight[pair][height].IsZero() && v[mm] != nil {
+							sumCQuoSumC = sumCQuoSumC.Add(v[mm].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
+						}
 					}
 					// TODO: make map, uptime^3
-					fmt.Println(i, pair, mm, sumCQuoSumC)
+					//fmt.Println(i, pair, mm, sumCQuoSumC)
 				}
 			}
 		}
@@ -285,12 +337,62 @@ func Main(ctx Context) error {
 		// TODO: Monthly Obligation
 
 		// TODO: reset when next month
+		// TODO: not eligible mm -> only check obligation
 
 	}
 	return nil
 }
 
-func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.Order, err error) {
+// TODO: make generator
+func GenerateMockOrders(pair liquiditytypes.Pair, incentivePair marketmakertypes.IncentivePair, height int64, blockTime *time.Time, params *liquiditytypes.Params, mmMap map[string]struct{}) (orders []liquiditytypes.Order, err error) {
+	r := rand.New(rand.NewSource(0))
+
+	// TODO: add mm address
+	mmMap["cre1fckkusk84mz4z2r4a2jj9fmap39y6q9dw3g5lk"] = struct{}{}
+	mmMap["cre1qgutsvynw88v0tjjcvjyqz6lnhzkyn8duv3uev"] = struct{}{}
+
+	tickPrec := int(params.TickPrecision)
+
+	// TODO: rand seed
+	for mm, _ := range mmMap {
+		orderOrNot := rand.Intn(2)
+		if orderOrNot == 1 {
+			continue
+		}
+		//amountOverOrNot := rand.Bool()
+		//priceRangeValidOrNot := rand.Bool()
+
+		sellAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
+			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
+
+		buyAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
+			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
+
+		simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
+
+		msg := liquiditytypes.MsgMMOrder{
+			Orderer:       mm,
+			PairId:        1,
+			MaxSellPrice:  amm.PriceToDownTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
+			MinSellPrice:  amm.PriceToUpTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
+			SellAmount:    sellAmount,
+			MaxBuyPrice:   amm.PriceToUpTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
+			MinBuyPrice:   amm.PriceToDownTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
+			BuyAmount:     buyAmount,
+			OrderLifespan: 0,
+		}
+
+		newOrders, err := MMOrder(pair, height, blockTime, params, &msg)
+		if err != nil {
+			panic(err)
+		} else {
+			orders = append(orders, newOrders...)
+		}
+	}
+	return orders, nil
+}
+
+func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (orderRes []liquiditytypes.Order, err error) {
 	req := liquiditytypes.QueryOrdersRequest{
 		PairId: pairId,
 		Pagination: &query.PageRequest{
@@ -312,68 +414,7 @@ func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64
 	return res.Orders, nil
 }
 
-func QueryPoolsGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.PoolResponse, err error) {
-	req := liquiditytypes.QueryPoolsRequest{
-		PairId:   pairId,
-		Disabled: "false",
-		Pagination: &query.PageRequest{
-			Limit: 1000,
-		},
-	}
-
-	var header metadata.MD
-
-	res, err := cli.Pools(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.Pools, nil
-}
-
-func QueryLiquidityParamsGRPC(cli liquiditytypes.QueryClient, height int64) (resParams *liquiditytypes.QueryParamsResponse, err error) {
-	req := liquiditytypes.QueryParamsRequest{}
-
-	var header metadata.MD
-
-	res, err := cli.Params(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
-func QueryPairsGRPC(cli liquiditytypes.QueryClient, height int64) (poolsRes []liquiditytypes.Pair, err error) {
-	pairsReq := liquiditytypes.QueryPairsRequest{
-		Pagination: &query.PageRequest{
-			Limit: 100,
-		},
-	}
-
-	var header metadata.MD
-
-	pairs, err := cli.Pairs(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&pairsReq,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return pairs.Pairs, nil
-}
-
-func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) (resParams *marketmakertypes.QueryParamsResponse, err error) {
+func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) (paramRes *marketmakertypes.QueryParamsResponse, err error) {
 	req := marketmakertypes.QueryParamsRequest{}
 
 	var header metadata.MD
@@ -407,8 +448,116 @@ func QueryLastBlockTimeGRPC(cli minttypes.QueryClient, height int64) (blockTime 
 	return res.LastBlockTime, nil
 }
 
-func GetParamsMap(params marketmakertypes.Params) (pm ParamsMap) {
+func QueryPoolsGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.PoolResponse, err error) {
+	req := liquiditytypes.QueryPoolsRequest{
+		PairId:   pairId,
+		Disabled: "false",
+		Pagination: &query.PageRequest{
+			Limit: 1000,
+		},
+	}
+
+	var header metadata.MD
+
+	res, err := cli.Pools(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&req,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return res.Pools, nil
+}
+
+func QueryLiquidityParamsGRPC(cli liquiditytypes.QueryClient, height int64) (paramRes *liquiditytypes.Params, err error) {
+	req := liquiditytypes.QueryParamsRequest{}
+
+	var header metadata.MD
+
+	res, err := cli.Params(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&req,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &res.Params, nil
+}
+
+func QueryPairsGRPC(cli liquiditytypes.QueryClient, height int64) (pairsRes []liquiditytypes.Pair, err error) {
+	pairsReq := liquiditytypes.QueryPairsRequest{
+		Pagination: &query.PageRequest{
+			Limit: 100,
+		},
+	}
+
+	var header metadata.MD
+
+	pairs, err := cli.Pairs(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&pairsReq,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return pairs.Pairs, nil
+}
+
+func QueryPairGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (pair liquiditytypes.Pair, err error) {
+	pairsReq := liquiditytypes.QueryPairRequest{
+		PairId: pairId,
+	}
+
+	var header metadata.MD
+
+	pairRes, err := cli.Pair(
+		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
+		&pairsReq,
+		grpc.Header(&header),
+	)
+	if err != nil {
+		return pair, err
+	}
+
+	return pairRes.Pair, nil
+}
+
+func GetParamsMap(params marketmakertypes.Params, blockTime *time.Time) (pm ParamsMap) {
 	pm.Common = params.Common
-	pm.IncentivePairsMap = params.IncentivePairsMap()
+	// TODO: temporary generate mock pairs
+	params.IncentivePairs = append(params.IncentivePairs, marketmakertypes.IncentivePair{
+		PairId:          8,
+		UpdateTime:      utils.ParseTime("2022-09-01T00:00:00Z"),
+		IncentiveWeight: sdk.MustNewDecFromStr("0.9"),
+		MaxSpread:       sdk.MustNewDecFromStr("0.006"),
+		MinWidth:        sdk.MustNewDecFromStr("0.001"),
+		MinDepth:        sdk.NewInt(600000000000000000),
+	})
+
+	// handle incentive pair's update time
+	iMap := make(map[uint64]marketmakertypes.IncentivePair)
+	for _, pair := range params.IncentivePairs {
+		if pair.UpdateTime.Before(*blockTime) {
+			iMap[pair.PairId] = pair
+		}
+	}
+
+	pm.IncentivePairsMap = iMap
+	//pm.IncentivePairsMap = params.IncentivePairsMap()
+
+	return
+}
+
+func GetPairsMap(pairs []liquiditytypes.Pair) (pairsMap map[uint64]liquiditytypes.Pair) {
+	pairsMap = map[uint64]liquiditytypes.Pair{}
+	for _, pair := range pairs {
+		pairsMap[pair.Id] = pair
+	}
 	return
 }

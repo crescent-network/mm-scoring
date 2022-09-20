@@ -4,9 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"reflect"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
+	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
+	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
+
+	"github.com/crescent-network/crescent/v3/x/liquidity/amm"
 	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
 )
 
@@ -37,6 +43,8 @@ type Result struct {
 	CBid sdk.Dec // TODO: To be deleted
 	CAsk sdk.Dec // TODO: To be deleted
 	CMin sdk.Dec // min(CBid, CAsk)
+
+	// TODO: MinWidth, MinDepth, MaxSpread
 
 	// TODO: live Uptime
 	Live bool
@@ -89,7 +97,8 @@ func (r Result) String() (str string) {
 	return
 }
 
-func SetResult(r *Result, pm ParamsMap) *Result {
+func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
+	pair := pm.IncentivePairsMap[pairId]
 	for _, order := range r.Orders {
 		r.TotalCount += 1
 
@@ -102,7 +111,7 @@ func SetResult(r *Result, pm ParamsMap) *Result {
 		}
 		// skip orders which is not over MinOpenRatio, and over MinOpenRatio of MinDepth from param
 		if order.OpenAmount.ToDec().QuoTruncate(order.Amount.ToDec()).LTE(pm.Common.MinOpenRatio) && order.OpenAmount.LT(
-			pm.IncentivePairsMap[order.PairId].MinDepth.ToDec().MulTruncate(pm.Common.MinOpenDepthRatio).TruncateInt()) {
+			pair.MinDepth.ToDec().MulTruncate(pm.Common.MinOpenDepthRatio).TruncateInt()) {
 			r.RemCount += 1
 			continue
 		}
@@ -126,6 +135,9 @@ func SetResult(r *Result, pm ParamsMap) *Result {
 			}
 		}
 	}
+	if r.BidMaxPrice.IsZero() || r.AskMinPrice.IsZero() {
+		return nil
+	}
 	// calc mid price, (BidMaxPrice + AskMinPrice)/2
 	r.MidPrice = r.BidMaxPrice.Add(r.AskMinPrice).QuoTruncate(sdk.NewDec(2))
 	r.Spread = r.AskMinPrice.Sub(r.BidMaxPrice).QuoTruncate(r.MidPrice)
@@ -143,6 +155,28 @@ func SetResult(r *Result, pm ParamsMap) *Result {
 	}
 	r.CMin = sdk.MinDec(r.CAsk, r.CBid)
 
+	// invalid orders
+	if r.CMin == sdk.ZeroDec() {
+		r.Live = false
+		return r
+	}
+
+	// Score is calculated for orders with spread smaller than MaxSpread
+	if r.Spread.GT(pair.MaxSpread) {
+		r.Live = false
+		return r
+	}
+
+	// TODO: need to check
+	// Minimum allowable price difference of high and low on both side of orders
+	if sdk.MinDec(r.AskWidth, r.BidWidth).LT(pair.MinWidth) {
+		r.Live = false
+		fmt.Println(r.AskWidth, r.BidWidth, pair.MinWidth)
+		fmt.Println("MIN WIDTH")
+		return r
+	}
+
+	r.Live = true
 	return r
 	// TODO: checking order tick cap validity
 }
@@ -159,4 +193,114 @@ func output(data interface{}, filename string) {
 	if err != nil {
 		fmt.Println(err)
 	}
+}
+
+// TODO: add test case
+func TimeToHour(timestamp *time.Time) (hour int) {
+	hour = timestamp.Day() * 24
+	hour += timestamp.Hour()
+	return hour
+}
+
+func GenWithdrawFeeRate(r *rand.Rand) sdk.Dec {
+	// TODO: get mid price, get Max, Min
+	return simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
+}
+
+func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, params *liquiditytypes.Params, msg *liquiditytypes.MsgMMOrder) (orders []liquiditytypes.Order, err error) {
+	tickPrec := int(params.TickPrecision)
+
+	if msg.SellAmount.IsPositive() {
+		if !amm.PriceToDownTick(msg.MinSellPrice, tickPrec).Equal(msg.MinSellPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceNotOnTicks, "min sell price is not on ticks")
+		}
+		if !amm.PriceToDownTick(msg.MaxSellPrice, tickPrec).Equal(msg.MaxSellPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceNotOnTicks, "max sell price is not on ticks")
+		}
+	}
+	if msg.BuyAmount.IsPositive() {
+		if !amm.PriceToDownTick(msg.MinBuyPrice, tickPrec).Equal(msg.MinBuyPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceNotOnTicks, "min buy price is not on ticks")
+		}
+		if !amm.PriceToDownTick(msg.MaxBuyPrice, tickPrec).Equal(msg.MaxBuyPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceNotOnTicks, "max buy price is not on ticks")
+		}
+	}
+
+	var lowestPrice, highestPrice sdk.Dec
+	if pair.LastPrice != nil {
+		lowestPrice, highestPrice = liquiditytypes.PriceLimits(*pair.LastPrice, params.MaxPriceLimitRatio, tickPrec)
+	} else {
+		lowestPrice = amm.LowestTick(tickPrec)
+		highestPrice = amm.HighestTick(tickPrec)
+	}
+
+	if msg.SellAmount.IsPositive() {
+		if msg.MinSellPrice.LT(lowestPrice) || msg.MinSellPrice.GT(highestPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceOutOfRange, "min sell price is out of range [%s, %s]", lowestPrice, highestPrice)
+		}
+		if msg.MaxSellPrice.LT(lowestPrice) || msg.MaxSellPrice.GT(highestPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceOutOfRange, "max sell price is out of range [%s, %s]", lowestPrice, highestPrice)
+		}
+	}
+	if msg.BuyAmount.IsPositive() {
+		if msg.MinBuyPrice.LT(lowestPrice) || msg.MinBuyPrice.GT(highestPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceOutOfRange, "min buy price is out of range [%s, %s]", lowestPrice, highestPrice)
+		}
+		if msg.MaxBuyPrice.LT(lowestPrice) || msg.MaxBuyPrice.GT(highestPrice) {
+			return nil, sdkerrors.Wrapf(liquiditytypes.ErrPriceOutOfRange, "max buy price is out of range [%s, %s]", lowestPrice, highestPrice)
+		}
+	}
+
+	maxNumTicks := int(params.MaxNumMarketMakingOrderTicks)
+
+	var buyTicks, sellTicks []liquiditytypes.MMOrderTick
+	offerBaseCoin := sdk.NewInt64Coin(pair.BaseCoinDenom, 0)
+	offerQuoteCoin := sdk.NewInt64Coin(pair.QuoteCoinDenom, 0)
+	if msg.BuyAmount.IsPositive() {
+		buyTicks = liquiditytypes.MMOrderTicks(
+			liquiditytypes.OrderDirectionBuy, msg.MinBuyPrice, msg.MaxBuyPrice, msg.BuyAmount, maxNumTicks, tickPrec)
+		for _, tick := range buyTicks {
+			offerQuoteCoin = offerQuoteCoin.AddAmount(tick.OfferCoinAmount)
+		}
+	}
+	if msg.SellAmount.IsPositive() {
+		sellTicks = liquiditytypes.MMOrderTicks(
+			liquiditytypes.OrderDirectionSell, msg.MinSellPrice, msg.MaxSellPrice, msg.SellAmount, maxNumTicks, tickPrec)
+		for _, tick := range sellTicks {
+			offerBaseCoin = offerBaseCoin.AddAmount(tick.OfferCoinAmount)
+		}
+	}
+
+	orderer := msg.GetOrderer()
+
+	maxOrderLifespan := params.MaxOrderLifespan
+	if msg.OrderLifespan > maxOrderLifespan {
+		return nil, sdkerrors.Wrapf(
+			liquiditytypes.ErrTooLongOrderLifespan, "%s is longer than %s", msg.OrderLifespan, maxOrderLifespan)
+	}
+
+	expireAt := blockTime.Add(msg.OrderLifespan)
+	lastOrderId := pair.LastOrderId
+
+	var orderIds []uint64
+	for _, tick := range buyTicks {
+		lastOrderId++
+		offerCoin := sdk.NewCoin(pair.QuoteCoinDenom, tick.OfferCoinAmount)
+		order := liquiditytypes.NewOrder(
+			liquiditytypes.OrderTypeMM, lastOrderId, pair, orderer,
+			offerCoin, tick.Price, tick.Amount, expireAt, height)
+		orders = append(orders, order)
+		orderIds = append(orderIds, order.Id)
+	}
+	for _, tick := range sellTicks {
+		lastOrderId++
+		offerCoin := sdk.NewCoin(pair.BaseCoinDenom, tick.OfferCoinAmount)
+		order := liquiditytypes.NewOrder(
+			liquiditytypes.OrderTypeMM, lastOrderId, pair, orderer,
+			offerCoin, tick.Price, tick.Amount, expireAt, height)
+		orders = append(orders, order)
+		orderIds = append(orderIds, order.Id)
+	}
+	return
 }

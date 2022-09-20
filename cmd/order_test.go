@@ -4,11 +4,17 @@ import (
 	"fmt"
 	"testing"
 
+	chain "github.com/crescent-network/crescent/v3/app"
+	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
+	"github.com/stretchr/testify/suite"
+	"google.golang.org/grpc"
+
 	sdk "github.com/cosmos/cosmos-sdk/types"
+
 	utils "github.com/crescent-network/crescent/v3/types"
 	"github.com/crescent-network/crescent/v3/x/liquidity/types"
+	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
 	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
-	"github.com/stretchr/testify/suite"
 
 	"github.com/crescent-network/mm-scoring/cmd"
 )
@@ -16,14 +22,15 @@ import (
 type OrderTestSuite struct {
 	suite.Suite
 
-	pm cmd.ParamsMap
+	pm  cmd.ParamsMap
+	ctx cmd.Context
 }
 
 func TestOrderTestSuite(t *testing.T) {
 	suite.Run(t, new(OrderTestSuite))
 }
 
-func (suite *OrderTestSuite) SetupTest() {
+func (suite *OrderTestSuite) SetupSuite() {
 	suite.pm = cmd.ParamsMap{
 		Common: marketmakertypes.DefaultCommon,
 		IncentivePairsMap: map[uint64]marketmakertypes.IncentivePair{
@@ -37,6 +44,25 @@ func (suite *OrderTestSuite) SetupTest() {
 			},
 		},
 	}
+
+	crecmd.GetConfig()
+	suite.ctx.Config = cmd.DefaultConfig
+	suite.ctx.Enc = chain.MakeEncodingConfig()
+
+	// ===================================== Create a connection to the gRPC server ====================================
+	grpcConn, err := grpc.Dial(
+		suite.ctx.Config.GrpcEndpoint, // your gRPC server address.
+		grpc.WithInsecure(),           // The Cosmos SDK doesn't support any transport security mechanism.
+		// This instantiates a general gRPC codec which handles proto bytes. We pass in a nil interface registry
+		// if the request/response types contain interface instead of 'nil' you should pass the application specific codec.
+		//grpc.WithDefaultCallOptions(grpc.ForceCodec(codec.NewProtoCodec(nil).GRPCCodec())),
+	)
+	if err != nil {
+		panic(err)
+	}
+	//defer grpcConn.Close()
+
+	suite.ctx.LiquidityClient = liquiditytypes.NewQueryClient(grpcConn)
 }
 
 func (suite *OrderTestSuite) TestGetResult() {
@@ -322,4 +348,38 @@ func (suite *OrderTestSuite) TestGetResult() {
 			fmt.Println(result)
 		})
 	}
+}
+
+func (suite *OrderTestSuite) TestMMOrder() {
+	height := int64(1987252)
+	blockTime := utils.ParseTime("2022-09-15T09:07:04.561862Z")
+
+	params := liquiditytypes.DefaultParams()
+
+	lastPrice := sdk.MustNewDecFromStr("1.111200000000000000")
+	pair := liquiditytypes.Pair{
+		Id:             1,
+		BaseCoinDenom:  "ubcre",
+		QuoteCoinDenom: "ucre",
+		EscrowAddress:  "cre17u9nx0h9cmhypp6cg9lf4q8ku9l3k8mz232su7m28m39lkz25dgqw9sanj",
+		LastOrderId:    1000,
+		LastPrice:      &lastPrice,
+		CurrentBatchId: 1000,
+	}
+
+	msg := liquiditytypes.MsgMMOrder{
+		Orderer:       "cre1dmdswwz59psqxeuswyygr6x4n7mjhq7c7ztw5k",
+		PairId:        1,
+		MaxSellPrice:  sdk.MustNewDecFromStr("1.21"),
+		MinSellPrice:  sdk.MustNewDecFromStr("1.115"),
+		SellAmount:    sdk.NewInt(500000),
+		MaxBuyPrice:   sdk.MustNewDecFromStr("1.1"),
+		MinBuyPrice:   sdk.MustNewDecFromStr("1.05"),
+		BuyAmount:     sdk.NewInt(500000),
+		OrderLifespan: 0,
+	}
+	orders, err := cmd.MMOrder(pair, height, &blockTime, &params, &msg)
+	suite.Require().NoError(err)
+
+	fmt.Println(orders)
 }
