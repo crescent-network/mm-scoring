@@ -4,23 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
+	"net/http"
 	"strconv"
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-	utils "github.com/crescent-network/crescent/v3/types"
-	"github.com/crescent-network/crescent/v3/x/liquidity/amm"
+	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
-
 	rpchttp "github.com/tendermint/tendermint/rpc/client/http"
 	ttypes "github.com/tendermint/tendermint/types"
-
-	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
-	"github.com/cosmos/cosmos-sdk/types/query"
+	"google.golang.org/grpc"
 
 	chain "github.com/crescent-network/crescent/v3/app"
 	appparams "github.com/crescent-network/crescent/v3/app/params"
@@ -31,9 +24,14 @@ import (
 )
 
 type Context struct {
-	StartHeight       int64
-	LastHeight        int64
-	LastScoringHeight int64
+	StartHeight          int64
+	LastHeight           int64
+	LastCalcHeight       int64
+	LastScoringHeight    int64
+	LastScoringBlockTime *time.Time
+	Month                int
+	Hours                int
+	LastHour             int
 
 	LiquidityClient   liquiditytypes.QueryClient
 	MarketMakerClient marketmakertypes.QueryClient
@@ -45,11 +43,41 @@ type Context struct {
 	WebsocketCtx       context.Context
 	Enc                appparams.EncodingConfig
 
-	// TODO: eligible, apply mm map
-	mmMap         map[uint64]map[string]struct{}
-	mmMapEligible map[uint64]map[string]struct{}
+	mmMap map[uint64]map[string]*MM
+
+	LastScoringBlock *Block
 
 	Config
+}
+
+type MM struct {
+	Address string
+	PairId  uint64
+
+	Eligible bool
+	Apply    bool
+
+	// No valid orders longer than MaxDowntime in a row
+	SerialDownTime int
+	// No valid orders longer than MaxTotalDowntime total in an hour
+	TotalDownTime int
+
+	DownThisHour bool
+
+	// Total Live Hours
+	TotalLiveHours int
+
+	// Live Hours for the day
+	LiveHours int
+
+	// total live days for this month
+	LiveDays int
+
+	// TODO: update when end of month
+	ThisMonthEligibility bool
+
+	Score      sdk.Dec
+	ScoreRatio sdk.Dec
 }
 
 type Config struct {
@@ -80,7 +108,8 @@ func NewScoringCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var ctx Context
 			ctx.Config = DefaultConfig
-			ctx.mmMap = map[uint64]map[string]struct{}{}
+			ctx.mmMap = map[uint64]map[string]*MM{}
+			ctx.LastScoringBlock = &Block{}
 
 			startHeight, err := strconv.ParseInt(args[0], 10, 64)
 			if err != nil {
@@ -107,7 +136,6 @@ func NewScoringCmd() *cobra.Command {
 				}
 				ctx.Config.SimulationMode = sim
 			}
-
 			return Main(ctx)
 		},
 	}
@@ -175,36 +203,19 @@ func Main(ctx Context) error {
 	}()
 
 	// =================================================================================================================
-
 	fmt.Println("version :", "v0.1.1")
 	fmt.Println("Input Start Height :", ctx.StartHeight)
 	fmt.Println("Simulation mode :", ctx.Config.SimulationMode)
 
-	startTime := time.Now()
-
-	// TODO: add result(C) for each mm on each height
-	// pair => height => Address => []order, TODO: add result(c)
 	OrderMapByHeight := map[uint64]map[int64]map[string]*Result{}
 	// pair => height => Summation C
 	SumCMapByHeight := map[uint64]map[int64]sdk.Dec{}
 
-	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
-	//OrderMapByHeight := map[uint64]map[int64]map[string][]liquiditytypes.Order{}
-	//CMapByHeight := map[uint64]map[int64]map[string]Result{}
-
-	// pair => height
-	//SummationCMap := map[uint64]map[int64]sdk.Dec{}
-
-	// pair => height => address => result
-	//ResultMapByHeight := map[uint64]map[int64]map[string]Result{}
-
-	// TODO: GET params, considering update height
-	//app.MarketMakerKeeper.GetParams(ctx)
-
 	time.Sleep(1000000000)
 
+	go Dashboard(ctx)
+
 	// iterate from startHeight
-	// TODO: if fail, retry new height with delay or websocket chan
 	for i := ctx.StartHeight; ; {
 		blockTime, err := QueryLastBlockTimeGRPC(ctx.MintClient, i)
 
@@ -214,10 +225,14 @@ func Main(ctx Context) error {
 			continue
 		}
 
+		// init time hours, months
+		if ctx.StartHeight == i {
+			ctx.Month = int(blockTime.Month())
+			ctx.LastHour = blockTime.Hour()
+		}
+
 		fmt.Println("----------")
 		fmt.Println(i, blockTime.String())
-		// TODO: uptime map
-		TimeToHour(blockTime)
 
 		// checking pruning height
 		marketmakerparams, err := QueryMarketMakerParamsGRPC(ctx.MarketMakerClient, i)
@@ -244,10 +259,9 @@ func Main(ctx Context) error {
 			// TODO: continue or use last state when updateTime is future
 
 			if _, ok := ctx.mmMap[pair.PairId]; !ok {
-				ctx.mmMap[pair.PairId] = map[string]struct{}{}
+				ctx.mmMap[pair.PairId] = map[string]*MM{}
 			}
 
-			// TODO: replacing generator
 			var orders []liquiditytypes.Order
 			if ctx.Config.SimulationMode {
 				orders, err = GenerateMockOrders(pairsMap[pair.PairId], ctx.ParamsMap.IncentivePairsMap[pair.PairId], i, blockTime, liquidityparams, ctx.mmMap[pair.PairId])
@@ -267,7 +281,10 @@ func Main(ctx Context) error {
 				}
 
 				if _, ok := ctx.mmMap[pair.PairId][order.Orderer]; !ok {
-					ctx.mmMap[pair.PairId][order.Orderer] = struct{}{}
+					ctx.mmMap[pair.PairId][order.Orderer] = &MM{
+						Address: order.Orderer,
+						PairId:  pair.PairId,
+					}
 				}
 
 				if _, ok := OrderMapByHeight[pair.PairId]; !ok {
@@ -295,269 +312,134 @@ func Main(ctx Context) error {
 				if result == nil {
 					continue
 				}
-				// TODO: summation only eligible mm
 				OrderMapByHeight[pair.PairId][i][k] = result
+				//// TODO: summation only eligible mm
+				//if ctx.mmMap[pair.PairId][k].Eligible {
+				//
+				//}
+				if !result.Live {
+					ctx.mmMap[pair.PairId][k].SerialDownTime = ctx.mmMap[pair.PairId][k].SerialDownTime + 1
+					ctx.mmMap[pair.PairId][k].TotalDownTime = ctx.mmMap[pair.PairId][k].TotalDownTime + 1
+					fmt.Println("add downtime", pair.PairId, k, ctx.mmMap[pair.PairId][k].SerialDownTime, ctx.mmMap[pair.PairId][k].TotalDownTime)
+
+					// Downtime checking
+					if ctx.mmMap[pair.PairId][k].SerialDownTime > int(ctx.ParamsMap.Common.MaxDowntime) ||
+						ctx.mmMap[pair.PairId][k].TotalDownTime > int(ctx.ParamsMap.Common.MaxTotalDowntime) {
+						ctx.mmMap[pair.PairId][k].DownThisHour = true
+					}
+				}
+				if ctx.LastHour != blockTime.Hour() && !ctx.mmMap[pair.PairId][k].DownThisHour {
+					ctx.mmMap[pair.PairId][k].LiveHours += 1
+					ctx.mmMap[pair.PairId][k].TotalLiveHours += 1
+					if blockTime.Hour() == 0 {
+						// LiveDay is added as LiveHour is equal or larger than MinHours in a day
+						if ctx.mmMap[pair.PairId][k].LiveHours >= int(ctx.ParamsMap.Common.MinHours) {
+							ctx.mmMap[pair.PairId][k].LiveDays += 1
+						}
+						ctx.mmMap[pair.PairId][k].LiveHours = 0
+					}
+				}
+
 				SumCMapByHeight[pair.PairId][i] = SumCMapByHeight[pair.PairId][i].Add(OrderMapByHeight[pair.PairId][i][k].CMin)
 			}
 		}
-		ctx.LastScoringHeight = i
+		ctx.LastCalcHeight = i
 		i++
 
 		fmt.Println("StartHeight :", ctx.StartHeight)
 		fmt.Println("LastHeight :", ctx.LastHeight)
 		fmt.Println("LastScoringHeight :", ctx.LastScoringHeight)
-		output(OrderMapByHeight, "output.json")
-		output(SumCMapByHeight, "output-sum.json")
-		output(ctx.mmMap, "output-mmMap.json")
 
-		//block = blockStore.LoadBlock(i)
-		if i%100 == 0 {
-			fmt.Println(i, time.Now().Sub(startTime))
-			// TODO: calc tmp score with summation and uptime calc
-			for pair, mms := range ctx.mmMap {
-				for mm, _ := range mms {
-					sumCQuoSumC := sdk.ZeroDec()
-					for height, v := range OrderMapByHeight[pair] {
-						// TODO: fix div by zero
-						// summation CQuoSumC
-						if !SumCMapByHeight[pair][height].IsZero() && v[mm] != nil {
-							sumCQuoSumC = sumCQuoSumC.Add(v[mm].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
-						}
-					}
-					// TODO: make map, uptime^3
-					//fmt.Println(i, pair, mm, sumCQuoSumC)
-				}
+		// next hour
+		if ctx.LastHour != blockTime.Hour() {
+			ctx.Hours += 1
+			ctx.LastHour = blockTime.Hour()
+
+			if ctx.Month != int(blockTime.Month()) {
+				// TODO: reset scoring
+				// TODO: checking LiveDay, MinDays
 			}
 		}
 
-		// TODO: 20 serial block Obligation
-		// TODO: 100 total block Obligation
-		// TODO: Hour Obligation
-		// TODO: Daily Obligation
-		// TODO: Monthly Obligation
+		// scoring every 1000 blocks
+		if i%1000 == 0 {
+			ctx.LastScoringHeight = i
+			ctx.LastScoringBlockTime = blockTime
+			ctx.LastScoringBlock.Height = i
+			ctx.LastScoringBlock.Time = blockTime
 
+			// checking eligible and applied
+			mmResult, err := QueryMarketMakersGRPC(ctx.MarketMakerClient, i)
+			if err != nil {
+				panic(err)
+			}
+			for _, mm := range mmResult {
+				if _, ok := ctx.mmMap[mm.PairId][mm.Address]; ok {
+					if mm.Eligible {
+						ctx.mmMap[mm.PairId][mm.Address].Eligible = true
+					} else {
+						ctx.mmMap[mm.PairId][mm.Address].Apply = true
+					}
+				}
+			}
+
+			for pair, mms := range ctx.mmMap {
+				ScoreSum := sdk.ZeroDec()
+				for _, mm := range mms {
+					sumCQuoSumC := sdk.ZeroDec()
+					for height, v := range OrderMapByHeight[pair] {
+						// summation CQuoSumC
+						if !SumCMapByHeight[pair][height].IsZero() && v[mm.Address] != nil {
+							sumCQuoSumC = sumCQuoSumC.Add(v[mm.Address].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
+						}
+					}
+					U := sdk.NewDec(int64(mm.TotalLiveHours)).Quo(sdk.NewDec(int64(ctx.Hours)))
+					U3 := U.Power(3)
+					Score := sumCQuoSumC.Mul(U3)
+					ScoreSum = ScoreSum.Add(Score)
+					ctx.mmMap[pair][mm.Address].Score = Score
+
+					fmt.Println(i, mm.Address, mm.PairId, U3, sumCQuoSumC.Mul(U3), sumCQuoSumC)
+				}
+				for _, mm := range mms {
+					ctx.mmMap[pair][mm.Address].ScoreRatio = ctx.mmMap[pair][mm.Address].Score.QuoTruncate(ScoreSum)
+				}
+			}
+
+			// TODO: temporary debugging output
+			output(OrderMapByHeight, "output.json")
+			output(SumCMapByHeight, "output-sum.json")
+			output(ctx.mmMap, "output-mmMap.json")
+
+		}
 		// TODO: reset when next month
-		// TODO: not eligible mm -> only check obligation
-
 	}
 	return nil
 }
 
-// TODO: make generator
-func GenerateMockOrders(pair liquiditytypes.Pair, incentivePair marketmakertypes.IncentivePair, height int64, blockTime *time.Time, params *liquiditytypes.Params, mmMap map[string]struct{}) (orders []liquiditytypes.Order, err error) {
-	r := rand.New(rand.NewSource(0))
-
-	// TODO: add mm address
-	mmMap["cre1fckkusk84mz4z2r4a2jj9fmap39y6q9dw3g5lk"] = struct{}{}
-	mmMap["cre1qgutsvynw88v0tjjcvjyqz6lnhzkyn8duv3uev"] = struct{}{}
-
-	tickPrec := int(params.TickPrecision)
-
-	// TODO: rand seed
-	for mm, _ := range mmMap {
-		orderOrNot := rand.Intn(2)
-		if orderOrNot == 1 {
-			continue
-		}
-		//amountOverOrNot := rand.Bool()
-		//priceRangeValidOrNot := rand.Bool()
-
-		sellAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
-			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
-
-		buyAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
-			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
-
-		simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
-
-		msg := liquiditytypes.MsgMMOrder{
-			Orderer:       mm,
-			PairId:        1,
-			MaxSellPrice:  amm.PriceToDownTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
-			MinSellPrice:  amm.PriceToUpTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
-			SellAmount:    sellAmount,
-			MaxBuyPrice:   amm.PriceToUpTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
-			MinBuyPrice:   amm.PriceToDownTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
-			BuyAmount:     buyAmount,
-			OrderLifespan: 0,
-		}
-
-		newOrders, err := MMOrder(pair, height, blockTime, params, &msg)
-		if err != nil {
-			panic(err)
-		} else {
-			orders = append(orders, newOrders...)
-		}
-	}
-	return orders, nil
+type Score struct {
+	//Height    int64
+	//BlockTime *time.Time
+	Block *Block
+	Score map[uint64]map[string]*MM
 }
 
-func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (orderRes []liquiditytypes.Order, err error) {
-	req := liquiditytypes.QueryOrdersRequest{
-		PairId: pairId,
-		Pagination: &query.PageRequest{
-			Limit: 1000,
-		},
-	}
-
-	var header metadata.MD
-
-	res, err := cli.Orders(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.Orders, nil
+type Block struct {
+	Height int64
+	Time   *time.Time
 }
 
-func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) (paramRes *marketmakertypes.QueryParamsResponse, err error) {
-	req := marketmakertypes.QueryParamsRequest{}
+func Dashboard(ctx Context) {
+	r := gin.New()
 
-	var header metadata.MD
-
-	res, err := cli.Params(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res, nil
-}
-
-func QueryLastBlockTimeGRPC(cli minttypes.QueryClient, height int64) (blockTime *time.Time, err error) {
-	req := minttypes.QueryLastBlockTimeRequest{}
-
-	var header metadata.MD
-
-	res, err := cli.LastBlockTime(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.LastBlockTime, nil
-}
-
-func QueryPoolsGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (poolsRes []liquiditytypes.PoolResponse, err error) {
-	req := liquiditytypes.QueryPoolsRequest{
-		PairId:   pairId,
-		Disabled: "false",
-		Pagination: &query.PageRequest{
-			Limit: 1000,
-		},
-	}
-
-	var header metadata.MD
-
-	res, err := cli.Pools(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return res.Pools, nil
-}
-
-func QueryLiquidityParamsGRPC(cli liquiditytypes.QueryClient, height int64) (paramRes *liquiditytypes.Params, err error) {
-	req := liquiditytypes.QueryParamsRequest{}
-
-	var header metadata.MD
-
-	res, err := cli.Params(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&req,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return &res.Params, nil
-}
-
-func QueryPairsGRPC(cli liquiditytypes.QueryClient, height int64) (pairsRes []liquiditytypes.Pair, err error) {
-	pairsReq := liquiditytypes.QueryPairsRequest{
-		Pagination: &query.PageRequest{
-			Limit: 100,
-		},
-	}
-
-	var header metadata.MD
-
-	pairs, err := cli.Pairs(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&pairsReq,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return nil, err
-	}
-
-	return pairs.Pairs, nil
-}
-
-func QueryPairGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) (pair liquiditytypes.Pair, err error) {
-	pairsReq := liquiditytypes.QueryPairRequest{
-		PairId: pairId,
-	}
-
-	var header metadata.MD
-
-	pairRes, err := cli.Pair(
-		metadata.AppendToOutgoingContext(context.Background(), grpctypes.GRPCBlockHeightHeader, strconv.FormatInt(height, 10)),
-		&pairsReq,
-		grpc.Header(&header),
-	)
-	if err != nil {
-		return pair, err
-	}
-
-	return pairRes.Pair, nil
-}
-
-func GetParamsMap(params marketmakertypes.Params, blockTime *time.Time) (pm ParamsMap) {
-	pm.Common = params.Common
-	// TODO: temporary generate mock pairs
-	params.IncentivePairs = append(params.IncentivePairs, marketmakertypes.IncentivePair{
-		PairId:          8,
-		UpdateTime:      utils.ParseTime("2022-09-01T00:00:00Z"),
-		IncentiveWeight: sdk.MustNewDecFromStr("0.9"),
-		MaxSpread:       sdk.MustNewDecFromStr("0.006"),
-		MinWidth:        sdk.MustNewDecFromStr("0.001"),
-		MinDepth:        sdk.NewInt(600000000000000000),
+	r.GET("/score", func(c *gin.Context) {
+		c.JSON(http.StatusOK, Score{
+			//Height:    ctx.LastScoringHeight,
+			//BlockTime: ctx.LastScoringBlockTime,
+			Block: ctx.LastScoringBlock,
+			Score: ctx.mmMap,
+		})
 	})
 
-	// handle incentive pair's update time
-	iMap := make(map[uint64]marketmakertypes.IncentivePair)
-	for _, pair := range params.IncentivePairs {
-		if pair.UpdateTime.Before(*blockTime) {
-			iMap[pair.PairId] = pair
-		}
-	}
-
-	pm.IncentivePairsMap = iMap
-	//pm.IncentivePairsMap = params.IncentivePairsMap()
-
-	return
-}
-
-func GetPairsMap(pairs []liquiditytypes.Pair) (pairsMap map[uint64]liquiditytypes.Pair) {
-	pairsMap = map[uint64]liquiditytypes.Pair{}
-	for _, pair := range pairs {
-		pairsMap[pair.Id] = pair
-	}
-	return
+	r.Run()
 }

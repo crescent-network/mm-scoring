@@ -40,7 +40,7 @@ func (suite *OrderTestSuite) SetupSuite() {
 				IncentiveWeight: sdk.MustNewDecFromStr("0.1"),
 				MaxSpread:       sdk.MustNewDecFromStr("0.012"),
 				MinWidth:        sdk.MustNewDecFromStr("0.002"),
-				MinDepth:        sdk.NewInt(50000000000),
+				MinDepth:        sdk.NewInt(100000000),
 			},
 		},
 	}
@@ -73,8 +73,8 @@ func (suite *OrderTestSuite) TestGetResult() {
 		Spread             sdk.Dec
 		AskWidth           sdk.Dec
 		BidWidth           sdk.Dec
-		AskQuantity        sdk.Int
-		BidQuantity        sdk.Int
+		AskDepth           sdk.Int
+		BidDepth           sdk.Int
 		AskMaxPrice        sdk.Dec
 		AskMinPrice        sdk.Dec
 		BidMaxPrice        sdk.Dec
@@ -197,8 +197,8 @@ func (suite *OrderTestSuite) TestGetResult() {
 			Spread:             sdk.MustNewDecFromStr("0.051282051282051282"),
 			AskWidth:           sdk.MustNewDecFromStr("0.085470085470085470"),
 			BidWidth:           sdk.MustNewDecFromStr("0.119658119658119658"),
-			AskQuantity:        sdk.NewInt(20000000000),
-			BidQuantity:        sdk.NewInt(54100000000),
+			AskDepth:           sdk.NewInt(20000000000),
+			BidDepth:           sdk.NewInt(54100000000),
 			AskMaxPrice:        sdk.MustNewDecFromStr("1.300000000000000000"),
 			AskMinPrice:        sdk.MustNewDecFromStr("1.200000000000000000"),
 			BidMaxPrice:        sdk.MustNewDecFromStr("1.140000000000000000"),
@@ -210,7 +210,7 @@ func (suite *OrderTestSuite) TestGetResult() {
 			TotalCount:         8,
 		},
 		{
-			Name: "case2 - spec example",
+			Name: "case block 1 a - spec example",
 			Orders: []types.Order{
 				{
 					Id:         478556,
@@ -313,8 +313,8 @@ func (suite *OrderTestSuite) TestGetResult() {
 			Spread:             sdk.MustNewDecFromStr("0.003016591251885369"),
 			AskWidth:           sdk.MustNewDecFromStr("0.003016591251885369"),
 			BidWidth:           sdk.MustNewDecFromStr("0.003016591251885369"),
-			AskQuantity:        sdk.NewInt(200000000),
-			BidQuantity:        sdk.NewInt(160000000),
+			AskDepth:           sdk.NewInt(200000000),
+			BidDepth:           sdk.NewInt(160000000),
 			AskMaxPrice:        sdk.MustNewDecFromStr("9.990000000000000000"),
 			AskMinPrice:        sdk.MustNewDecFromStr("9.960000000000000000"),
 			BidMaxPrice:        sdk.MustNewDecFromStr("9.930000000000000000"),
@@ -325,17 +325,317 @@ func (suite *OrderTestSuite) TestGetResult() {
 			InvalidStatusCount: 0,
 			TotalCount:         8,
 		},
+		{
+			Name: "case block 2, a - spec example",
+			Orders: []types.Order{
+				{
+					Id:         478556,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.990000000000000000"),
+					Amount:     sdk.NewInt(50000000),
+					OpenAmount: sdk.NewInt(50000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478557,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.980000000000000000"),
+					Amount:     sdk.NewInt(50000000),
+					OpenAmount: sdk.NewInt(50000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478558,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.970000000000000000"),
+					Amount:     sdk.NewInt(50000000),
+					OpenAmount: sdk.NewInt(50000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478559,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.960000000000000000"),
+					Amount:     sdk.NewInt(50000000),
+					OpenAmount: sdk.NewInt(40000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478560,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.930000000000000000"),
+					Amount:     sdk.NewInt(40000000),
+					OpenAmount: sdk.NewInt(0),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478561,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.920000000000000000"),
+					Amount:     sdk.NewInt(40000000),
+					OpenAmount: sdk.NewInt(5000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478562,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.910000000000000000"),
+					Amount:     sdk.NewInt(40000000),
+					OpenAmount: sdk.NewInt(40000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478563,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.900000000000000000"),
+					Amount:     sdk.NewInt(40000000),
+					OpenAmount: sdk.NewInt(40000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+			},
+			MidPrice:           sdk.MustNewDecFromStr("9.935000000000000000"),
+			Spread:             sdk.MustNewDecFromStr("0.005032712632108706"),
+			AskWidth:           sdk.MustNewDecFromStr("0.003019627579265223"),
+			BidWidth:           sdk.MustNewDecFromStr("0.001006542526421741"),
+			AskDepth:           sdk.NewInt(190000000),
+			BidDepth:           sdk.NewInt(80000000),
+			AskMaxPrice:        sdk.MustNewDecFromStr("9.990000000000000000"),
+			AskMinPrice:        sdk.MustNewDecFromStr("9.960000000000000000"),
+			BidMaxPrice:        sdk.MustNewDecFromStr("9.910000000000000000"),
+			BidMinPrice:        sdk.MustNewDecFromStr("9.900000000000000000"),
+			BidCount:           2,
+			AskCount:           4,
+			RemCount:           2,
+			InvalidStatusCount: 0,
+			TotalCount:         8,
+		},
+		{
+			Name: "case block 1 b - spec example",
+			Orders: []types.Order{
+				{
+					Id:         478556,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.990000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478557,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.980000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478558,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.970000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478561,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.920000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(80000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478562,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.910000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(80000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478563,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.900000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(80000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+			},
+			MidPrice:           sdk.MustNewDecFromStr("9.945000000000000000"),
+			Spread:             sdk.MustNewDecFromStr("0.005027652086475615"),
+			AskWidth:           sdk.MustNewDecFromStr("0.002011060834590246"),
+			BidWidth:           sdk.MustNewDecFromStr("0.002011060834590246"),
+			AskDepth:           sdk.NewInt(225000000),
+			BidDepth:           sdk.NewInt(240000000),
+			AskMaxPrice:        sdk.MustNewDecFromStr("9.990000000000000000"),
+			AskMinPrice:        sdk.MustNewDecFromStr("9.970000000000000000"),
+			BidMaxPrice:        sdk.MustNewDecFromStr("9.920000000000000000"),
+			BidMinPrice:        sdk.MustNewDecFromStr("9.900000000000000000"),
+			BidCount:           3,
+			AskCount:           3,
+			RemCount:           0,
+			InvalidStatusCount: 0,
+			TotalCount:         6,
+		},
+		{
+			Name: "case block 2 b - spec example",
+			Orders: []types.Order{
+				{
+					Id:         478556,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.990000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478557,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.980000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478558,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionSell, // 2
+					Price:      sdk.MustNewDecFromStr("9.970000000000000000"),
+					Amount:     sdk.NewInt(75000000),
+					OpenAmount: sdk.NewInt(75000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478561,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.920000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(20000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478562,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.910000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(80000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+				{
+					Id:         478563,
+					PairId:     1,
+					MsgHeight:  478556,
+					Orderer:    "cre18s7e4ag2stm85jwlvy7fs7hufx8xc0sg3efwuy",
+					Direction:  types.OrderDirectionBuy, // 2
+					Price:      sdk.MustNewDecFromStr("9.900000000000000000"),
+					Amount:     sdk.NewInt(80000000),
+					OpenAmount: sdk.NewInt(80000000),
+					BatchId:    399117,
+					Status:     types.OrderStatusNotMatched, // 2
+				},
+			},
+			MidPrice:           sdk.MustNewDecFromStr("9.945000000000000000"),
+			Spread:             sdk.MustNewDecFromStr("0.005027652086475615"),
+			AskWidth:           sdk.MustNewDecFromStr("0.002011060834590246"),
+			BidWidth:           sdk.MustNewDecFromStr("0.002011060834590246"),
+			AskDepth:           sdk.NewInt(225000000),
+			BidDepth:           sdk.NewInt(180000000),
+			AskMaxPrice:        sdk.MustNewDecFromStr("9.990000000000000000"),
+			AskMinPrice:        sdk.MustNewDecFromStr("9.970000000000000000"),
+			BidMaxPrice:        sdk.MustNewDecFromStr("9.920000000000000000"),
+			BidMinPrice:        sdk.MustNewDecFromStr("9.900000000000000000"),
+			BidCount:           3,
+			AskCount:           3,
+			RemCount:           0,
+			InvalidStatusCount: 0,
+			TotalCount:         6,
+		},
 	} {
 		suite.Run(tc.Name, func() {
 			result := cmd.NewResult()
 			result.Orders = tc.Orders
-			result = cmd.SetResult(result, suite.pm)
+			result = cmd.SetResult(result, suite.pm, tc.Orders[0].PairId)
 			suite.Require().EqualValues(result.MidPrice, tc.MidPrice)
 			suite.Require().EqualValues(result.Spread, tc.Spread)
 			suite.Require().EqualValues(result.AskWidth, tc.AskWidth)
 			suite.Require().EqualValues(result.BidWidth, tc.BidWidth)
-			suite.Require().EqualValues(result.AskQuantity, tc.AskQuantity)
-			suite.Require().EqualValues(result.BidQuantity, tc.BidQuantity)
+			suite.Require().EqualValues(result.AskDepth, tc.AskDepth)
+			suite.Require().EqualValues(result.BidDepth, tc.BidDepth)
 			suite.Require().EqualValues(result.AskMaxPrice, tc.AskMaxPrice)
 			suite.Require().EqualValues(result.AskMinPrice, tc.AskMinPrice)
 			suite.Require().EqualValues(result.BidMaxPrice, tc.BidMaxPrice)

@@ -11,18 +11,11 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-
+	utils "github.com/crescent-network/crescent/v3/types"
 	"github.com/crescent-network/crescent/v3/x/liquidity/amm"
 	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
 )
-
-// TODO: order checking status, expired as function on this?
-// TODO: Calc Spread from order list of the height of a pair
-// TODO: Distance, midPrice, both side, min
-// testcode with input orderlist
-// GET C_mt, summation of C_mt for share
-// Spread, Distance, Width
-// SET params as json file
 
 type Result struct {
 	Orders []liquiditytypes.Order
@@ -30,23 +23,21 @@ type Result struct {
 	MidPrice sdk.Dec
 	Spread   sdk.Dec
 
-	AskWidth    sdk.Dec
-	BidWidth    sdk.Dec
-	AskQuantity sdk.Int
-	BidQuantity sdk.Int
+	AskWidth sdk.Dec
+	BidWidth sdk.Dec
+
+	AskDepth sdk.Int
+	BidDepth sdk.Int
 
 	AskMaxPrice sdk.Dec
 	AskMinPrice sdk.Dec
 	BidMaxPrice sdk.Dec
 	BidMinPrice sdk.Dec
 
-	CBid sdk.Dec // TODO: To be deleted
-	CAsk sdk.Dec // TODO: To be deleted
+	CBid sdk.Dec
+	CAsk sdk.Dec
 	CMin sdk.Dec // min(CBid, CAsk)
 
-	// TODO: MinWidth, MinDepth, MaxSpread
-
-	// TODO: live Uptime
 	Live bool
 
 	BidCount           int
@@ -63,8 +54,8 @@ func NewResult() (result *Result) {
 		MidPrice:    sdk.ZeroDec(),
 		AskWidth:    sdk.ZeroDec(),
 		BidWidth:    sdk.ZeroDec(),
-		AskQuantity: sdk.ZeroInt(),
-		BidQuantity: sdk.ZeroInt(),
+		AskDepth:    sdk.ZeroInt(),
+		BidDepth:    sdk.ZeroInt(),
 		AskMaxPrice: sdk.ZeroDec(),
 		AskMinPrice: sdk.ZeroDec(),
 		BidMaxPrice: sdk.ZeroDec(),
@@ -117,7 +108,7 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 		}
 		if order.Direction == liquiditytypes.OrderDirectionBuy { // BID
 			r.BidCount += 1
-			r.BidQuantity = r.BidQuantity.Add(order.OpenAmount)
+			r.BidDepth = r.BidDepth.Add(order.OpenAmount)
 			if order.Price.GTE(r.BidMaxPrice) {
 				r.BidMaxPrice = order.Price
 			}
@@ -126,7 +117,7 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 			}
 		} else if order.Direction == liquiditytypes.OrderDirectionSell { // ASK
 			r.AskCount += 1
-			r.AskQuantity = r.AskQuantity.Add(order.OpenAmount)
+			r.AskDepth = r.AskDepth.Add(order.OpenAmount)
 			if order.Price.GTE(r.AskMaxPrice) {
 				r.AskMaxPrice = order.Price
 			}
@@ -164,24 +155,25 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 	// Score is calculated for orders with spread smaller than MaxSpread
 	if r.Spread.GT(pair.MaxSpread) {
 		r.Live = false
+		r.CMin = sdk.ZeroDec()
 		return r
 	}
 
-	// TODO: need to check
 	// Minimum allowable price difference of high and low on both side of orders
 	if sdk.MinDec(r.AskWidth, r.BidWidth).LT(pair.MinWidth) {
 		r.Live = false
-		fmt.Println(r.AskWidth, r.BidWidth, pair.MinWidth)
-		fmt.Println("MIN WIDTH")
+		r.CMin = sdk.ZeroDec()
 		return r
+	}
+
+	if sdk.MinInt(r.AskDepth, r.BidDepth).LT(pair.MinDepth) {
+		r.Live = false
+		r.CMin = sdk.ZeroDec()
 	}
 
 	r.Live = true
 	return r
-	// TODO: checking order tick cap validity
 }
-
-// TODO: live calculation from map OrderMapByHeight
 
 func output(data interface{}, filename string) {
 	var p []byte
@@ -195,16 +187,10 @@ func output(data interface{}, filename string) {
 	}
 }
 
-// TODO: add test case
 func TimeToHour(timestamp *time.Time) (hour int) {
 	hour = timestamp.Day() * 24
 	hour += timestamp.Hour()
 	return hour
-}
-
-func GenWithdrawFeeRate(r *rand.Rand) sdk.Dec {
-	// TODO: get mid price, get Max, Min
-	return simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
 }
 
 func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, params *liquiditytypes.Params, msg *liquiditytypes.MsgMMOrder) (orders []liquiditytypes.Order, err error) {
@@ -303,4 +289,59 @@ func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, param
 		orderIds = append(orderIds, order.Id)
 	}
 	return
+}
+
+func GenerateMockOrders(pair liquiditytypes.Pair, incentivePair marketmakertypes.IncentivePair, height int64, blockTime *time.Time, params *liquiditytypes.Params, mmMap map[string]*MM) (orders []liquiditytypes.Order, err error) {
+	r := rand.New(rand.NewSource(0))
+
+	mms := []string{
+		"cre1fckkusk84mz4z2r4a2jj9fmap39y6q9dw3g5lk",
+		"cre1qgutsvynw88v0tjjcvjyqz6lnhzkyn8duv3uev",
+		"cre1dmdswwz59psqxeuswyygr6x4n7mjhq7c7ztw5k",
+	}
+	for _, mm := range mms {
+		if _, ok := mmMap[mm]; !ok {
+			mmMap[mm] = &MM{
+				Address: mm,
+				PairId:  pair.Id,
+			}
+		}
+	}
+
+	tickPrec := int(params.TickPrecision)
+
+	for mm, _ := range mmMap {
+		orderOrNot := rand.Intn(2)
+		if orderOrNot == 1 {
+			continue
+		}
+
+		sellAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
+			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
+
+		buyAmount := incentivePair.MinDepth.MulRaw(int64(params.MaxNumMarketMakingOrderTicks)).ToDec().Mul(
+			utils.RandomDec(r, utils.ParseDec("0.95"), utils.ParseDec("1.45"))).TruncateInt()
+
+		simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
+
+		msg := liquiditytypes.MsgMMOrder{
+			Orderer:       mm,
+			PairId:        1,
+			MaxSellPrice:  amm.PriceToDownTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
+			MinSellPrice:  amm.PriceToUpTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
+			SellAmount:    sellAmount,
+			MaxBuyPrice:   amm.PriceToUpTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.001"), utils.ParseDec("0.01")))), tickPrec),
+			MinBuyPrice:   amm.PriceToDownTick(pair.LastPrice.Sub(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
+			BuyAmount:     buyAmount,
+			OrderLifespan: 0,
+		}
+
+		newOrders, err := MMOrder(pair, height, blockTime, params, &msg)
+		if err != nil {
+			panic(err)
+		} else {
+			orders = append(orders, newOrders...)
+		}
+	}
+	return orders, nil
 }
