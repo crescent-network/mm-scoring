@@ -149,6 +149,7 @@ func Main(ctx Context) error {
 	ctx.Enc = chain.MakeEncodingConfig()
 
 	// ===================================== Create a connection to the gRPC server ====================================
+	fmt.Println("dialing: ", ctx.Config.GrpcEndpoint)
 	grpcConn, err := grpc.Dial(
 		ctx.Config.GrpcEndpoint, // your gRPC server address.
 		grpc.WithInsecure(),     // The Cosmos SDK doesn't support any transport security mechanism.
@@ -207,6 +208,7 @@ func Main(ctx Context) error {
 	fmt.Println("Input Start Height :", ctx.StartHeight)
 	fmt.Println("Simulation mode :", ctx.Config.SimulationMode)
 
+	// pair => height => addr => Result
 	OrderMapByHeight := map[uint64]map[int64]map[string]*Result{}
 	// pair => height => Summation C
 	SumCMapByHeight := map[uint64]map[int64]sdk.Dec{}
@@ -240,6 +242,7 @@ func Main(ctx Context) error {
 			fmt.Println("pruning height", i)
 			panic("not pruning data")
 		}
+		// TODO: checking change of params, start date
 
 		// need when only using generator
 		liquidityparams, err := QueryLiquidityParamsGRPC(ctx.LiquidityClient, i)
