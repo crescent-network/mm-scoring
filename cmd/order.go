@@ -11,10 +11,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-	utils "github.com/crescent-network/crescent/v3/types"
-	"github.com/crescent-network/crescent/v3/x/liquidity/amm"
-	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
+	utils "github.com/crescent-network/crescent/v5/types"
+	"github.com/crescent-network/crescent/v5/x/liquidity/amm"
+	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
 )
 
 type Result struct {
@@ -193,7 +193,7 @@ func TimeToHour(timestamp *time.Time) (hour int) {
 	return hour
 }
 
-func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, params *liquiditytypes.Params, msg *liquiditytypes.MsgMMOrder) (orders []liquiditytypes.Order, err error) {
+func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, params *liquiditytypes.Params, msg *MsgMMOrder) (orders []liquiditytypes.Order, err error) {
 	tickPrec := int(params.TickPrecision)
 
 	if msg.SellAmount.IsPositive() {
@@ -240,18 +240,18 @@ func MMOrder(pair liquiditytypes.Pair, height int64, blockTime *time.Time, param
 
 	maxNumTicks := int(params.MaxNumMarketMakingOrderTicks)
 
-	var buyTicks, sellTicks []liquiditytypes.MMOrderTick
+	var buyTicks, sellTicks []MMOrderTick
 	offerBaseCoin := sdk.NewInt64Coin(pair.BaseCoinDenom, 0)
 	offerQuoteCoin := sdk.NewInt64Coin(pair.QuoteCoinDenom, 0)
 	if msg.BuyAmount.IsPositive() {
-		buyTicks = liquiditytypes.MMOrderTicks(
+		buyTicks = MMOrderTicks(
 			liquiditytypes.OrderDirectionBuy, msg.MinBuyPrice, msg.MaxBuyPrice, msg.BuyAmount, maxNumTicks, tickPrec)
 		for _, tick := range buyTicks {
 			offerQuoteCoin = offerQuoteCoin.AddAmount(tick.OfferCoinAmount)
 		}
 	}
 	if msg.SellAmount.IsPositive() {
-		sellTicks = liquiditytypes.MMOrderTicks(
+		sellTicks = MMOrderTicks(
 			liquiditytypes.OrderDirectionSell, msg.MinSellPrice, msg.MaxSellPrice, msg.SellAmount, maxNumTicks, tickPrec)
 		for _, tick := range sellTicks {
 			offerBaseCoin = offerBaseCoin.AddAmount(tick.OfferCoinAmount)
@@ -324,7 +324,7 @@ func GenerateMockOrders(pair liquiditytypes.Pair, incentivePair marketmakertypes
 
 		simtypes.RandomDecAmount(r, sdk.NewDecWithPrec(1, 2))
 
-		msg := liquiditytypes.MsgMMOrder{
+		msg := MsgMMOrder{
 			Orderer:       mm,
 			PairId:        1,
 			MaxSellPrice:  amm.PriceToDownTick(pair.LastPrice.Add(pair.LastPrice.Mul(utils.RandomDec(r, utils.ParseDec("0.011"), utils.ParseDec("0.016")))), tickPrec),
@@ -344,4 +344,180 @@ func GenerateMockOrders(pair liquiditytypes.Pair, incentivePair marketmakertypes
 		}
 	}
 	return orders, nil
+}
+
+// ============================ legacy crescent v4 mm order ============================
+
+// MsgMMOrder defines an SDK message for making a MM(market making) order, v4 legacy
+type MsgMMOrder struct {
+	// orderer specifies the bech32-encoded address that makes an order
+	Orderer string `protobuf:"bytes,1,opt,name=orderer,proto3" json:"orderer,omitempty"`
+	// pair_id specifies the pair id
+	PairId uint64 `protobuf:"varint,2,opt,name=pair_id,json=pairId,proto3" json:"pair_id,omitempty"`
+	// max_sell_price specifies the maximum sell price
+	MaxSellPrice sdk.Dec `protobuf:"bytes,3,opt,name=max_sell_price,json=maxSellPrice,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Dec" json:"max_sell_price"`
+	// min_sell_price specifies the minimum sell price
+	MinSellPrice sdk.Dec `protobuf:"bytes,4,opt,name=min_sell_price,json=minSellPrice,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Dec" json:"min_sell_price"`
+	// sell_amount specifies the total amount of base coin of sell orders
+	SellAmount sdk.Int `protobuf:"bytes,5,opt,name=sell_amount,json=sellAmount,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Int" json:"sell_amount"`
+	// max_buy_price specifies the maximum buy price
+	MaxBuyPrice sdk.Dec `protobuf:"bytes,6,opt,name=max_buy_price,json=maxBuyPrice,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Dec" json:"max_buy_price"`
+	// min_buy_price specifies the minimum buy price
+	MinBuyPrice sdk.Dec `protobuf:"bytes,7,opt,name=min_buy_price,json=minBuyPrice,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Dec" json:"min_buy_price"`
+	// buy_amount specifies the total amount of base coin of buy orders
+	BuyAmount sdk.Int `protobuf:"bytes,8,opt,name=buy_amount,json=buyAmount,proto3,customtype=github.com/cosmos/cosmos-sdk/types.Int" json:"buy_amount"`
+	// order_lifespan specifies the order lifespan
+	OrderLifespan time.Duration `protobuf:"bytes,9,opt,name=order_lifespan,json=orderLifespan,proto3,stdduration" json:"order_lifespan"`
+}
+
+// NewMsgMMOrder creates a new MsgMMOrder.
+func NewMsgMMOrder(
+	orderer sdk.AccAddress,
+	pairId uint64,
+	maxSellPrice, minSellPrice sdk.Dec, sellAmt sdk.Int,
+	maxBuyPrice, minBuyPrice sdk.Dec, buyAmt sdk.Int,
+	orderLifespan time.Duration,
+) *MsgMMOrder {
+	return &MsgMMOrder{
+		Orderer:       orderer.String(),
+		PairId:        pairId,
+		MaxSellPrice:  maxSellPrice,
+		MinSellPrice:  minSellPrice,
+		SellAmount:    sellAmt,
+		MaxBuyPrice:   maxBuyPrice,
+		MinBuyPrice:   minBuyPrice,
+		BuyAmount:     buyAmt,
+		OrderLifespan: orderLifespan,
+	}
+}
+
+func (msg MsgMMOrder) Route() string { return liquiditytypes.RouterKey }
+
+func (msg MsgMMOrder) Type() string { return liquiditytypes.TypeMsgMMOrder }
+
+func (msg MsgMMOrder) ValidateBasic() error {
+	if _, err := sdk.AccAddressFromBech32(msg.Orderer); err != nil {
+		return sdkerrors.Wrapf(sdkerrors.ErrInvalidAddress, "invalid orderer address: %v", err)
+	}
+	if msg.PairId == 0 {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "pair id must not be 0")
+	}
+	if msg.SellAmount.IsZero() && msg.BuyAmount.IsZero() {
+		return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "sell amount and buy amount must not be zero at the same time")
+	}
+	if !msg.SellAmount.IsZero() {
+		if msg.SellAmount.LT(amm.MinCoinAmount) {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "sell amount %s is smaller than the min amount %s", msg.SellAmount, amm.MinCoinAmount)
+		}
+		if !msg.MaxSellPrice.IsPositive() {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "max sell price must be positive: %s", msg.MaxSellPrice)
+		}
+		if !msg.MinSellPrice.IsPositive() {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "min sell price must be positive: %s", msg.MinSellPrice)
+		}
+		if msg.MinSellPrice.GT(msg.MaxSellPrice) {
+			return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "max sell price must not be lower than min sell price")
+		}
+	}
+	if !msg.BuyAmount.IsZero() {
+		if msg.BuyAmount.LT(amm.MinCoinAmount) {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "buy amount %s is smaller than the min amount %s", msg.BuyAmount, amm.MinCoinAmount)
+		}
+		if !msg.MinBuyPrice.IsPositive() {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "min buy price must be positive: %s", msg.MinBuyPrice)
+		}
+		if !msg.MaxBuyPrice.IsPositive() {
+			return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "max buy price must be positive: %s", msg.MaxBuyPrice)
+		}
+		if msg.MinBuyPrice.GT(msg.MaxBuyPrice) {
+			return sdkerrors.Wrap(sdkerrors.ErrInvalidRequest, "max buy price must not be lower than min buy price")
+		}
+	}
+	if msg.OrderLifespan < 0 {
+		return sdkerrors.Wrapf(sdkerrors.ErrInvalidRequest, "order lifespan must not be negative: %s", msg.OrderLifespan)
+	}
+	return nil
+}
+
+//func (msg MsgMMOrder) GetSignBytes() []byte {
+//	return sdk.MustSortJSON(ModuleCdc.MustMarshalJSON(&msg))
+//}
+
+func (msg MsgMMOrder) GetSigners() []sdk.AccAddress {
+	addr, err := sdk.AccAddressFromBech32(msg.Orderer)
+	if err != nil {
+		panic(err)
+	}
+	return []sdk.AccAddress{addr}
+}
+
+func (msg MsgMMOrder) GetOrderer() sdk.AccAddress {
+	addr, err := sdk.AccAddressFromBech32(msg.Orderer)
+	if err != nil {
+		panic(err)
+	}
+	return addr
+}
+
+// MMOrderTick holds information about each tick's price and amount of an MMOrder.
+type MMOrderTick struct {
+	OfferCoinAmount sdk.Int
+	Price           sdk.Dec
+	Amount          sdk.Int
+}
+
+// MMOrderTicks returns fairly distributed tick information with given parameters.
+func MMOrderTicks(dir liquiditytypes.OrderDirection, minPrice, maxPrice sdk.Dec, amt sdk.Int, maxNumTicks, tickPrec int) (ticks []MMOrderTick) {
+	ammDir := amm.OrderDirection(dir)
+	if minPrice.Equal(maxPrice) {
+		return []MMOrderTick{{OfferCoinAmount: amm.OfferCoinAmount(ammDir, minPrice, amt), Price: minPrice, Amount: amt}}
+	}
+	gap := maxPrice.Sub(minPrice).QuoInt64(int64(maxNumTicks - 1))
+	switch dir {
+	case liquiditytypes.OrderDirectionBuy:
+		var prevP sdk.Dec
+		for i := 0; i < maxNumTicks-1; i++ {
+			p := amm.PriceToDownTick(minPrice.Add(gap.MulInt64(int64(i))), tickPrec)
+			if prevP.IsNil() || !p.Equal(prevP) {
+				ticks = append(ticks, MMOrderTick{
+					Price: p,
+				})
+				prevP = p
+			}
+		}
+		tickAmt := amt.QuoRaw(int64(len(ticks) + 1))
+		for i := range ticks {
+			ticks[i].Amount = tickAmt
+			ticks[i].OfferCoinAmount = amm.OfferCoinAmount(ammDir, ticks[i].Price, ticks[i].Amount)
+			amt = amt.Sub(tickAmt)
+		}
+		ticks = append(ticks, MMOrderTick{
+			OfferCoinAmount: amm.OfferCoinAmount(ammDir, maxPrice, amt),
+			Price:           maxPrice,
+			Amount:          amt,
+		})
+	case liquiditytypes.OrderDirectionSell:
+		var prevP sdk.Dec
+		for i := 0; i < maxNumTicks-1; i++ {
+			p := amm.PriceToUpTick(maxPrice.Sub(gap.MulInt64(int64(i))), tickPrec)
+			if prevP.IsNil() || !p.Equal(prevP) {
+				ticks = append(ticks, MMOrderTick{
+					Price: p,
+				})
+				prevP = p
+			}
+		}
+		tickAmt := amt.QuoRaw(int64(len(ticks) + 1))
+		for i := range ticks {
+			ticks[i].Amount = tickAmt
+			ticks[i].OfferCoinAmount = amm.OfferCoinAmount(ammDir, ticks[i].Price, ticks[i].Amount)
+			amt = amt.Sub(tickAmt)
+		}
+		ticks = append(ticks, MMOrderTick{
+			OfferCoinAmount: amm.OfferCoinAmount(ammDir, minPrice, amt),
+			Price:           minPrice,
+			Amount:          amt,
+		})
+	}
+	return
 }

@@ -6,14 +6,14 @@ import (
 	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
-	utils "github.com/crescent-network/crescent/v3/types"
+	utils "github.com/crescent-network/crescent/v5/types"
 	"google.golang.org/grpc"
 
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/cosmos/cosmos-sdk/types/query"
-	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
-	minttypes "github.com/crescent-network/crescent/v3/x/mint/types"
+	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
+	minttypes "github.com/crescent-network/crescent/v5/x/mint/types"
 	"google.golang.org/grpc/metadata"
 )
 

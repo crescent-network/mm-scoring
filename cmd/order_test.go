@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"testing"
 
-	chain "github.com/crescent-network/crescent/v3/app"
-	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
+	chain "github.com/crescent-network/crescent/v5/app"
+	crecmd "github.com/crescent-network/crescent/v5/cmd/crescentd/cmd"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	utils "github.com/crescent-network/crescent/v3/types"
-	"github.com/crescent-network/crescent/v3/x/liquidity/types"
-	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
+	utils "github.com/crescent-network/crescent/v5/types"
+	"github.com/crescent-network/crescent/v5/x/liquidity/types"
+	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
 
 	"github.com/crescent-network/mm-scoring/cmd"
 )
@@ -667,7 +667,7 @@ func (suite *OrderTestSuite) TestMMOrder() {
 		CurrentBatchId: 1000,
 	}
 
-	msg := liquiditytypes.MsgMMOrder{
+	msg := cmd.MsgMMOrder{
 		Orderer:       "cre1dmdswwz59psqxeuswyygr6x4n7mjhq7c7ztw5k",
 		PairId:        1,
 		MaxSellPrice:  sdk.MustNewDecFromStr("1.21"),

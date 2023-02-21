@@ -6,7 +6,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
+	crecmd "github.com/crescent-network/crescent/v5/cmd/crescentd/cmd"
 
 	"github.com/crescent-network/mm-scoring/cmd"
 )

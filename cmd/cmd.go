@@ -15,12 +15,12 @@ import (
 	ttypes "github.com/tendermint/tendermint/types"
 	"google.golang.org/grpc"
 
-	chain "github.com/crescent-network/crescent/v3/app"
-	appparams "github.com/crescent-network/crescent/v3/app/params"
-	crecmd "github.com/crescent-network/crescent/v3/cmd/crescentd/cmd"
-	liquiditytypes "github.com/crescent-network/crescent/v3/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v3/x/marketmaker/types"
-	minttypes "github.com/crescent-network/crescent/v3/x/mint/types"
+	chain "github.com/crescent-network/crescent/v5/app"
+	appparams "github.com/crescent-network/crescent/v5/app/params"
+	crecmd "github.com/crescent-network/crescent/v5/cmd/crescentd/cmd"
+	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
+	minttypes "github.com/crescent-network/crescent/v5/x/mint/types"
 )
 
 type Context struct {
@@ -94,9 +94,11 @@ type ParamsMap struct {
 }
 
 var DefaultConfig = Config{
-	GrpcEndpoint:   "127.0.0.1:9090",
-	RpcEndpoint:    "tcp://127.0.0.1:26657",
-	SimulationMode: false,
+	GrpcEndpoint: "13.124.45.5:9090",
+	//GrpcEndpoint:   "127.0.0.1:9090",
+	RpcEndpoint: "tcp://13.124.45.5:26657",
+	//RpcEndpoint:    "tcp://127.0.0.1:26657",
+	SimulationMode: true,
 }
 
 func NewScoringCmd() *cobra.Command {
