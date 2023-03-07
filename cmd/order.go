@@ -89,6 +89,13 @@ func (r Result) String() (str string) {
 }
 
 func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
+	// 2-sided liquidity required
+	if len(r.Orders) < 2 {
+		r.Live = false
+		r.CMin = sdk.ZeroDec()
+		return r
+	}
+
 	pair := pm.IncentivePairsMap[pairId]
 	for _, order := range r.Orders {
 		r.TotalCount += 1
@@ -136,6 +143,12 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 	r.BidWidth = r.BidMaxPrice.Sub(r.BidMinPrice).QuoTruncate(r.MidPrice)
 
 	for _, order := range r.Orders {
+		// 2-sided liquidity required
+		if order.Price.Equal(r.MidPrice) {
+			r.Live = false
+			r.CMin = sdk.ZeroDec()
+			return r
+		}
 		if order.Direction == liquiditytypes.OrderDirectionSell {
 			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
 			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().QuoTruncate(askD.Power(2)))

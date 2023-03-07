@@ -43,6 +43,7 @@ type Context struct {
 	WebsocketCtx       context.Context
 	Enc                appparams.EncodingConfig
 
+	// pair id -> mm addr -> MM
 	mmMap map[uint64]map[string]*MM
 
 	LastScoringBlock *Block
@@ -367,7 +368,7 @@ func Main(ctx Context) error {
 		}
 
 		// scoring every 1000 blocks
-		if i%1000 == 0 {
+		if i%1000 == 0 && ctx.Hours > 0 {
 			ctx.LastScoringHeight = i
 			ctx.LastScoringBlockTime = blockTime
 			ctx.LastScoringBlock.Height = i
@@ -398,6 +399,7 @@ func Main(ctx Context) error {
 							sumCQuoSumC = sumCQuoSumC.Add(v[mm.Address].CMin.QuoTruncate(SumCMapByHeight[pair][height]))
 						}
 					}
+
 					U := sdk.NewDec(int64(mm.TotalLiveHours)).Quo(sdk.NewDec(int64(ctx.Hours)))
 					U3 := U.Power(3)
 					Score := sumCQuoSumC.Mul(U3)
@@ -406,8 +408,14 @@ func Main(ctx Context) error {
 
 					fmt.Println(i, mm.Address, mm.PairId, U3, sumCQuoSumC.Mul(U3), sumCQuoSumC)
 				}
-				for _, mm := range mms {
-					ctx.mmMap[pair][mm.Address].ScoreRatio = ctx.mmMap[pair][mm.Address].Score.QuoTruncate(ScoreSum)
+				if ScoreSum.IsZero() {
+					for _, mm := range mms {
+						ctx.mmMap[pair][mm.Address].ScoreRatio = sdk.ZeroDec()
+					}
+				} else {
+					for _, mm := range mms {
+						ctx.mmMap[pair][mm.Address].ScoreRatio = ctx.mmMap[pair][mm.Address].Score.QuoTruncate(ScoreSum)
+					}
 				}
 			}
 
