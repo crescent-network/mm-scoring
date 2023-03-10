@@ -95,10 +95,8 @@ type ParamsMap struct {
 }
 
 var DefaultConfig = Config{
-	GrpcEndpoint: "13.124.45.5:9090",
-	//GrpcEndpoint:   "127.0.0.1:9090",
-	RpcEndpoint: "tcp://13.124.45.5:26657",
-	//RpcEndpoint:    "tcp://127.0.0.1:26657",
+	GrpcEndpoint:   "127.0.0.1:9090",
+	RpcEndpoint:    "tcp://127.0.0.1:26657",
 	SimulationMode: true,
 }
 
@@ -216,6 +214,8 @@ func Main(ctx Context) error {
 	// pair => height => Summation C
 	SumCMapByHeight := map[uint64]map[int64]sdk.Dec{}
 
+	BlockTimeMap := map[uint64]time.Time{}
+
 	time.Sleep(1000000000)
 
 	go Dashboard(ctx)
@@ -229,6 +229,8 @@ func Main(ctx Context) error {
 			time.Sleep(1000000000)
 			continue
 		}
+
+		BlockTimeMap[uint64(i)] = *blockTime
 
 		// init time hours, months
 		if ctx.StartHeight == i {
@@ -264,6 +266,7 @@ func Main(ctx Context) error {
 		for _, pair := range ctx.ParamsMap.IncentivePairsMap {
 			// TODO: continue or use last state when updateTime is future
 
+			// init map by pair id
 			if _, ok := ctx.mmMap[pair.PairId]; !ok {
 				ctx.mmMap[pair.PairId] = map[string]*MM{}
 			}
@@ -274,6 +277,11 @@ func Main(ctx Context) error {
 				if err != nil {
 					return err
 				}
+				ordersReal, err := QueryOrdersGRPC(ctx.LiquidityClient, pair.PairId, i)
+				if err != nil {
+					return err
+				}
+				orders = append(orders, ordersReal...)
 			} else {
 				orders, err = QueryOrdersGRPC(ctx.LiquidityClient, pair.PairId, i)
 				if err != nil {
@@ -333,17 +341,32 @@ func Main(ctx Context) error {
 						ctx.mmMap[pair.PairId][k].TotalDownTime > int(ctx.ParamsMap.Common.MaxTotalDowntime) {
 						ctx.mmMap[pair.PairId][k].DownThisHour = true
 					}
+				} else {
+					// TODO: need to check
+					// reset SerialDownTime when comeback live
+					ctx.mmMap[pair.PairId][k].SerialDownTime = 0
 				}
-				if ctx.LastHour != blockTime.Hour() && !ctx.mmMap[pair.PairId][k].DownThisHour {
-					ctx.mmMap[pair.PairId][k].LiveHours += 1
-					ctx.mmMap[pair.PairId][k].TotalLiveHours += 1
+				// if the hour changed
+				if ctx.LastHour != blockTime.Hour() {
+					// if live
+					if !ctx.mmMap[pair.PairId][k].DownThisHour {
+						ctx.mmMap[pair.PairId][k].LiveHours += 1
+						ctx.mmMap[pair.PairId][k].TotalLiveHours += 1
+					}
+					// if the day changed
 					if blockTime.Hour() == 0 {
 						// LiveDay is added as LiveHour is equal or larger than MinHours in a day
 						if ctx.mmMap[pair.PairId][k].LiveHours >= int(ctx.ParamsMap.Common.MinHours) {
 							ctx.mmMap[pair.PairId][k].LiveDays += 1
 						}
+						// reset live hours
 						ctx.mmMap[pair.PairId][k].LiveHours = 0
 					}
+					// TODO: need to check
+					// reset down status
+					ctx.mmMap[pair.PairId][k].DownThisHour = false
+					ctx.mmMap[pair.PairId][k].TotalDownTime = 0
+					ctx.mmMap[pair.PairId][k].SerialDownTime = 0
 				}
 
 				SumCMapByHeight[pair.PairId][i] = SumCMapByHeight[pair.PairId][i].Add(OrderMapByHeight[pair.PairId][i][k].CMin)
@@ -420,9 +443,10 @@ func Main(ctx Context) error {
 			}
 
 			// TODO: temporary debugging output
-			output(OrderMapByHeight, "output.json")
-			output(SumCMapByHeight, "output-sum.json")
-			output(ctx.mmMap, "output-mmMap.json")
+			output(OrderMapByHeight, "input_orders_with_result.json")
+			output(SumCMapByHeight, "sum_c_each_pair_height.json")
+			output(ctx.mmMap, fmt.Sprintf("scoring_result_%d.json", i))
+			output(BlockTimeMap, "block_time.json")
 
 		}
 		// TODO: reset when next month
