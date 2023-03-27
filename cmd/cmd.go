@@ -390,8 +390,8 @@ func Main(ctx Context) error {
 			}
 		}
 
-		// scoring every 1000 blocks
-		if i%1000 == 0 && ctx.Hours > 0 {
+		// scoring every 100 blocks
+		if i%100 == 0 && ctx.Hours > 0 {
 			ctx.LastScoringHeight = i
 			ctx.LastScoringBlockTime = blockTime
 			ctx.LastScoringBlock.Height = i
