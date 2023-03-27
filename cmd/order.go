@@ -91,6 +91,7 @@ func (r Result) String() (str string) {
 func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 	// 2-sided liquidity required
 	if len(r.Orders) < 2 {
+		// TODO: test coverage
 		r.Live = false
 		r.CMin = sdk.ZeroDec()
 		return r
@@ -133,8 +134,11 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 			}
 		}
 	}
+	// if bidMaxPrice or adkMinPrice is zero, we can't calculate mid price, set c_min to zero and return here
 	if r.BidMaxPrice.IsZero() || r.AskMinPrice.IsZero() {
-		return nil
+		r.Live = false
+		r.CMin = sdk.ZeroDec()
+		return r
 	}
 	// calc mid price, (BidMaxPrice + AskMinPrice)/2
 	r.MidPrice = r.BidMaxPrice.Add(r.AskMinPrice).QuoTruncate(sdk.NewDec(2))
@@ -142,31 +146,8 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 	r.AskWidth = r.AskMaxPrice.Sub(r.AskMinPrice).QuoTruncate(r.MidPrice)
 	r.BidWidth = r.BidMaxPrice.Sub(r.BidMinPrice).QuoTruncate(r.MidPrice)
 
-	for _, order := range r.Orders {
-		// 2-sided liquidity required
-		if order.Price.Equal(r.MidPrice) {
-			r.Live = false
-			r.CMin = sdk.ZeroDec()
-			return r
-		}
-		if order.Direction == liquiditytypes.OrderDirectionSell {
-			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
-			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().QuoTruncate(askD.Power(2)))
-		} else if order.Direction == liquiditytypes.OrderDirectionBuy {
-			bidD := r.MidPrice.Sub(order.Price).QuoTruncate(r.MidPrice)
-			r.CBid = r.CBid.Add(order.OpenAmount.ToDec().QuoTruncate(bidD.Power(2)))
-		}
-	}
-	r.CMin = sdk.MinDec(r.CAsk, r.CBid)
-
-	// invalid orders
-	if r.CMin == sdk.ZeroDec() {
-		r.Live = false
-		return r
-	}
-
-	// Score is calculated for orders with spread smaller than MaxSpread
-	if r.Spread.GT(pair.MaxSpread) {
+	// Spread should be larger than 0, equal or smaller than MaxSpread
+	if r.Spread.GT(pair.MaxSpread) || r.Spread.IsZero() {
 		r.Live = false
 		r.CMin = sdk.ZeroDec()
 		return r
@@ -180,8 +161,43 @@ func SetResult(r *Result, pm ParamsMap, pairId uint64) *Result {
 	}
 
 	if sdk.MinInt(r.AskDepth, r.BidDepth).LT(pair.MinDepth) {
+		// TODO: test coverage
 		r.Live = false
 		r.CMin = sdk.ZeroDec()
+		return r
+	}
+
+	for _, order := range r.Orders {
+		// skip orders which has not available status
+		if order.Status != liquiditytypes.OrderStatusNotExecuted &&
+			order.Status != liquiditytypes.OrderStatusNotMatched &&
+			order.Status != liquiditytypes.OrderStatusPartiallyMatched {
+			// TODO: test coverage
+			continue
+		}
+
+		// TODO: need to check if the 2-sided order placed
+		// 2-sided liquidity required, temporary panic, need to delete
+		if order.Price.Equal(r.MidPrice) {
+			// TODO: test coverage
+			panic("WIP debugging, mid price should not be equal to order price")
+
+		}
+		if order.Direction == liquiditytypes.OrderDirectionSell {
+			askD := order.Price.Sub(r.MidPrice).QuoTruncate(r.MidPrice)
+			r.CAsk = r.CAsk.Add(order.OpenAmount.ToDec().QuoTruncate(askD.Power(2)))
+		} else if order.Direction == liquiditytypes.OrderDirectionBuy {
+			bidD := r.MidPrice.Sub(order.Price).QuoTruncate(r.MidPrice)
+			r.CBid = r.CBid.Add(order.OpenAmount.ToDec().QuoTruncate(bidD.Power(2)))
+		}
+	}
+	r.CMin = sdk.MinDec(r.CAsk, r.CBid)
+
+	// invalid orders
+	// TODO: test coverage
+	if r.CMin.IsZero() {
+		r.Live = false
+		return r
 	}
 
 	r.Live = true
