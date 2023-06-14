@@ -4,7 +4,7 @@ go 1.18
 
 require (
 	github.com/cosmos/cosmos-sdk v0.45.10
-	github.com/crescent-network/crescent/v5 v5.0.0-rc2
+	github.com/crescent-network/crescent/v4 v4.1.1
 	github.com/gin-gonic/gin v1.6.3
 	github.com/spf13/cobra v1.6.0
 	github.com/stretchr/testify v1.8.0
@@ -140,8 +140,8 @@ require (
 
 replace (
 	github.com/confio/ics23/go => github.com/cosmos/cosmos-sdk/ics23/go v0.8.0 // dragonberry security patch
-	github.com/cosmos/cosmos-sdk => github.com/crescent-network/cosmos-sdk v1.2.0-sdk-0.45.10
-	github.com/cosmos/ibc-go/v3 => github.com/crescent-network/ibc-go/v3 v3.4.0-crescent-v4-2
+	github.com/cosmos/cosmos-sdk => github.com/crescent-network/cosmos-sdk v1.1.4-sdk-0.45.10
+	github.com/cosmos/ibc-go/v3 => github.com/crescent-network/ibc-go/v3 v3.4.0-crescent-v4-3
 	github.com/gogo/protobuf => github.com/regen-network/protobuf v1.3.3-alpha.regen.1
 	google.golang.org/grpc => google.golang.org/grpc v1.33.2
 )

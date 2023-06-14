@@ -11,10 +11,10 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkerrors "github.com/cosmos/cosmos-sdk/types/errors"
 	simtypes "github.com/cosmos/cosmos-sdk/types/simulation"
-	utils "github.com/crescent-network/crescent/v5/types"
-	"github.com/crescent-network/crescent/v5/x/liquidity/amm"
-	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
+	utils "github.com/crescent-network/crescent/v4/types"
+	"github.com/crescent-network/crescent/v4/x/liquidity/amm"
+	liquiditytypes "github.com/crescent-network/crescent/v4/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v4/x/marketmaker/types"
 )
 
 type Result struct {

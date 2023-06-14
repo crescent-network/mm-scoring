@@ -15,12 +15,12 @@ import (
 	ttypes "github.com/tendermint/tendermint/types"
 	"google.golang.org/grpc"
 
-	chain "github.com/crescent-network/crescent/v5/app"
-	appparams "github.com/crescent-network/crescent/v5/app/params"
-	crecmd "github.com/crescent-network/crescent/v5/cmd/crescentd/cmd"
-	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
-	minttypes "github.com/crescent-network/crescent/v5/x/mint/types"
+	chain "github.com/crescent-network/crescent/v4/app"
+	appparams "github.com/crescent-network/crescent/v4/app/params"
+	crecmd "github.com/crescent-network/crescent/v4/cmd/crescentd/cmd"
+	liquiditytypes "github.com/crescent-network/crescent/v4/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v4/x/marketmaker/types"
+	minttypes "github.com/crescent-network/crescent/v4/x/mint/types"
 )
 
 type Context struct {
@@ -44,7 +44,8 @@ type Context struct {
 	Enc                appparams.EncodingConfig
 
 	// pair id -> mm addr -> MM
-	mmMap map[uint64]map[string]*MM
+	mmMap           map[uint64]map[string]*MM
+	marketMakersMap map[uint64]map[string]*marketmakertypes.MarketMaker
 
 	LastScoringBlock *Block
 
@@ -90,8 +91,8 @@ type Config struct {
 }
 
 type ParamsMap struct {
-	Common            marketmakertypes.Common
-	IncentivePairsMap map[uint64]marketmakertypes.IncentivePair
+	Common            *marketmakertypes.Common
+	IncentivePairsMap map[uint64]*marketmakertypes.IncentivePair
 }
 
 var DefaultConfig = Config{
@@ -257,6 +258,12 @@ func Main(ctx Context) error {
 
 		ctx.ParamsMap = GetParamsMap(marketmakerparams.Params, blockTime)
 
+		marketMakers, err := QueryMarketMakersGRPC(ctx.MarketMakerClient, i)
+		if err != nil {
+			panic(err)
+		}
+		ctx.marketMakersMap = GetMarketMakersMap(marketMakers)
+
 		pairs, err := QueryPairsGRPC(ctx.LiquidityClient, i)
 		if err != nil {
 			panic(err)
@@ -273,7 +280,7 @@ func Main(ctx Context) error {
 
 			var orders []liquiditytypes.Order
 			if ctx.Config.SimulationMode {
-				orders, err = GenerateMockOrders(pairsMap[pair.PairId], ctx.ParamsMap.IncentivePairsMap[pair.PairId], i, blockTime, liquidityparams, ctx.mmMap[pair.PairId])
+				orders, err = GenerateMockOrders(pairsMap[pair.PairId], *ctx.ParamsMap.IncentivePairsMap[pair.PairId], i, blockTime, liquidityparams, ctx.mmMap[pair.PairId])
 				if err != nil {
 					return err
 				}
@@ -289,8 +296,13 @@ func Main(ctx Context) error {
 				}
 			}
 			for _, order := range orders {
-				// scoring only mm order type
-				if order.Type != liquiditytypes.OrderTypeMM {
+				// TODO: scoring only mm order type
+				if order.Type != liquiditytypes.OrderTypeLimit {
+					continue
+				}
+
+				// TODO: WIP, collecting orders only Eligible or applied market maker
+				if _, ok := ctx.marketMakersMap[pair.PairId][order.Orderer]; !ok {
 					continue
 				}
 
@@ -475,6 +487,23 @@ func Dashboard(ctx Context) {
 			//BlockTime: ctx.LastScoringBlockTime,
 			Block: ctx.LastScoringBlock,
 			Score: ctx.mmMap,
+		})
+	})
+
+	r.GET("/tmp", func(c *gin.Context) {
+		c.JSON(http.StatusOK, ParamsMap{
+			Common:            ctx.ParamsMap.Common,
+			IncentivePairsMap: ctx.ParamsMap.IncentivePairsMap,
+		})
+	})
+
+	r.GET("/params", func(c *gin.Context) {
+		marketmakerparams, err := QueryMarketMakerParamsGRPC(ctx.MarketMakerClient, ctx.LastHeight)
+		if err != nil {
+			panic("not pruning data")
+		}
+		c.JSON(http.StatusOK, marketmakertypes.QueryParamsResponse{
+			Params: marketmakerparams.Params,
 		})
 	})
 

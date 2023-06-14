@@ -5,15 +5,13 @@ import (
 	"strconv"
 	"time"
 
-	sdk "github.com/cosmos/cosmos-sdk/types"
-	utils "github.com/crescent-network/crescent/v5/types"
 	"google.golang.org/grpc"
 
 	grpctypes "github.com/cosmos/cosmos-sdk/types/grpc"
 	"github.com/cosmos/cosmos-sdk/types/query"
-	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
-	minttypes "github.com/crescent-network/crescent/v5/x/mint/types"
+	liquiditytypes "github.com/crescent-network/crescent/v4/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v4/x/marketmaker/types"
+	minttypes "github.com/crescent-network/crescent/v4/x/mint/types"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -40,6 +38,10 @@ func QueryOrdersGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64
 }
 
 func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) (paramRes *marketmakertypes.QueryParamsResponse, err error) {
+	if FlagManualParams {
+		return &marketmakertypes.QueryParamsResponse{Params: ManualParams}, nil
+	}
+
 	req := marketmakertypes.QueryParamsRequest{}
 
 	var header metadata.MD
@@ -57,6 +59,10 @@ func QueryMarketMakerParamsGRPC(cli marketmakertypes.QueryClient, height int64) 
 }
 
 func QueryMarketMakersGRPC(cli marketmakertypes.QueryClient, height int64) (mms []marketmakertypes.MarketMaker, err error) {
+	if FlagManualMarketMakers {
+		return ManualMarketMakers, nil
+	}
+
 	req := marketmakertypes.QueryMarketMakersRequest{
 		Pagination: &query.PageRequest{
 			Limit: 10000,
@@ -175,22 +181,22 @@ func QueryPairGRPC(cli liquiditytypes.QueryClient, pairId uint64, height int64) 
 }
 
 func GetParamsMap(params marketmakertypes.Params, blockTime *time.Time) (pm ParamsMap) {
-	pm.Common = params.Common
+	pm.Common = &params.Common
 	// TODO: temporary generate mock pairs
-	params.IncentivePairs = append(params.IncentivePairs, marketmakertypes.IncentivePair{
-		PairId:          8,
-		UpdateTime:      utils.ParseTime("2022-09-01T00:00:00Z"),
-		IncentiveWeight: sdk.MustNewDecFromStr("0.9"),
-		MaxSpread:       sdk.MustNewDecFromStr("0.006"),
-		MinWidth:        sdk.MustNewDecFromStr("0.001"),
-		MinDepth:        sdk.NewInt(600000000000000000),
-	})
+	//params.IncentivePairs = append(params.IncentivePairs, marketmakertypes.IncentivePair{
+	//	PairId:          8,
+	//	UpdateTime:      utils.ParseTime("2022-09-01T00:00:00Z"),
+	//	IncentiveWeight: sdk.MustNewDecFromStr("0.9"),
+	//	MaxSpread:       sdk.MustNewDecFromStr("0.006"),
+	//	MinWidth:        sdk.MustNewDecFromStr("0.001"),
+	//	MinDepth:        sdk.NewInt(600000000000000000),
+	//})
 
 	// handle incentive pair's update time
-	iMap := make(map[uint64]marketmakertypes.IncentivePair)
+	iMap := make(map[uint64]*marketmakertypes.IncentivePair)
 	for _, pair := range params.IncentivePairs {
 		if pair.UpdateTime.Before(*blockTime) {
-			iMap[pair.PairId] = pair
+			iMap[pair.PairId] = &pair
 		}
 	}
 
@@ -204,6 +210,17 @@ func GetPairsMap(pairs []liquiditytypes.Pair) (pairsMap map[uint64]liquiditytype
 	pairsMap = map[uint64]liquiditytypes.Pair{}
 	for _, pair := range pairs {
 		pairsMap[pair.Id] = pair
+	}
+	return
+}
+
+func GetMarketMakersMap(marketMakers []marketmakertypes.MarketMaker) (marketMakersMap map[uint64]map[string]*marketmakertypes.MarketMaker) {
+	marketMakersMap = map[uint64]map[string]*marketmakertypes.MarketMaker{}
+	for _, marketMaker := range marketMakers {
+		if _, ok := marketMakersMap[marketMaker.PairId]; !ok {
+			marketMakersMap[marketMaker.PairId] = map[string]*marketmakertypes.MarketMaker{}
+		}
+		marketMakersMap[marketMaker.PairId][marketMaker.Address] = &marketMaker
 	}
 	return
 }

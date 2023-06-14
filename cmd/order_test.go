@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"testing"
 
-	chain "github.com/crescent-network/crescent/v5/app"
-	crecmd "github.com/crescent-network/crescent/v5/cmd/crescentd/cmd"
+	chain "github.com/crescent-network/crescent/v4/app"
+	crecmd "github.com/crescent-network/crescent/v4/cmd/crescentd/cmd"
 	"github.com/stretchr/testify/suite"
 	"google.golang.org/grpc"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
-	utils "github.com/crescent-network/crescent/v5/types"
-	"github.com/crescent-network/crescent/v5/x/liquidity/types"
-	liquiditytypes "github.com/crescent-network/crescent/v5/x/liquidity/types"
-	marketmakertypes "github.com/crescent-network/crescent/v5/x/marketmaker/types"
+	utils "github.com/crescent-network/crescent/v4/types"
+	"github.com/crescent-network/crescent/v4/x/liquidity/types"
+	liquiditytypes "github.com/crescent-network/crescent/v4/x/liquidity/types"
+	marketmakertypes "github.com/crescent-network/crescent/v4/x/marketmaker/types"
 
 	"github.com/crescent-network/mm-scoring/cmd"
 )
